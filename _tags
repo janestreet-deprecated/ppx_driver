@@ -1,0 +1,5 @@
+    <**/*.ml{,i}>: warn(-40)
+# OASIS_START
+# OASIS_STOP
+    <runner/*>: linkall
+<runner_as_ppx/*>: linkall
