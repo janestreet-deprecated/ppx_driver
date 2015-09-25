@@ -16,14 +16,11 @@ The aim is to provide a tool that can be used to:
 ## Building a custom driver
 
 To build a custom driver, simply link all the AST transformers
-together with the `ppx_driver.runner` library at the end:
+together with the `ppx_driver_runner.cmxa` archive at the end:
 
-    ocamlfind ocamlopt -o ppx -linkpkg -linkall \
-      -package sexplib.ppx -package ... \
-      -package ppx_driver.runner
-
-Note that the `-linkall` is important here, as otherwise the various
-rewriters won't get linked into the final executable.
+    ocamlfind ocamlopt -predicates ppx_driver -o ppx -linkpkg \
+      -package ppx_sexp_conv -package ppx_bin_prot \
+      ppx_driver_runner.cmxa
 
 ## The driver as a command line tool
 
