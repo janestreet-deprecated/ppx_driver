@@ -1,5 +1,37 @@
     <**/*.ml{,i}>: warn(-40)
 # OASIS_START
+# DO NOT EDIT (digest: 0c57fee11b08641513f025e77d85118d)
+# Ignore VCS directories, you can use the same kind of rule outside
+# OASIS_START/STOP if you want to exclude directories that contains
+# useless stuff for the build process
+true: annot, bin_annot
+<**/.svn>: -traverse
+<**/.svn>: not_hygienic
+".bzr": -traverse
+".bzr": not_hygienic
+".hg": -traverse
+".hg": not_hygienic
+".git": -traverse
+".git": not_hygienic
+"_darcs": -traverse
+"_darcs": not_hygienic
+# Library ppx_driver
+"src/ppx_driver.cmxs": use_ppx_driver
+<src/*.ml{,i,y}>: package(compiler-libs.common)
+<src/*.ml{,i,y}>: package(ppx_core)
+<src/*.ml{,i,y}>: package(ppx_optcomp)
+# Library ppx_driver_runner
+"runner/ppx_driver_runner.cmxs": use_ppx_driver_runner
+<runner/*.ml{,i,y}>: package(compiler-libs.common)
+<runner/*.ml{,i,y}>: package(ppx_core)
+<runner/*.ml{,i,y}>: package(ppx_optcomp)
+<runner/*.ml{,i,y}>: use_ppx_driver
+# Library ppx_driver_runner_as_ppx
+"runner_as_ppx/ppx_driver_runner_as_ppx.cmxs": use_ppx_driver_runner_as_ppx
+<runner_as_ppx/*.ml{,i,y}>: package(compiler-libs.common)
+<runner_as_ppx/*.ml{,i,y}>: package(ppx_core)
+<runner_as_ppx/*.ml{,i,y}>: package(ppx_optcomp)
+<runner_as_ppx/*.ml{,i,y}>: use_ppx_driver
 # OASIS_STOP
     <runner/*>: linkall
 <runner_as_ppx/*>: linkall
