@@ -26,16 +26,21 @@ together with the `ppx_driver_runner.cmxa` archive at the end:
 
 ```
 $ ppx -help
-ppx.exe [extra_args] [files]
-  -as-ppx                Run as a -ppx rewriter (must be the first argument)
-  -o FILENAME            Output file (use '-' for stdout)
-  -loc-filename STRING   File name to use in locations
-  -dump-ast              Dump the marshaled ast to the output file instead of pretty-printing it
-  -dparsetree            Print the parsetree (same as ocamlc -dparsetree)
-  -impl FILE             Treat the input as a .ml file
-  -intf FILE             Treat the input as a .mli file
-  -help                  Display this list of options
-  --help                 Display this list of options
+ppx [extra_args] [files]
+  -as-ppx                 Run as a -ppx rewriter (must be the first argument)
+  -o FILENAME             Output file (use '-' for stdout)
+  -loc-filename STRING    File name to use in locations
+  -no-optcomp             Do not use optcomp
+  -dump-ast               Dump the marshaled ast to the output file instead of pretty-printing it
+  -dparsetree             Print the parsetree (same as ocamlc -dparsetree)
+  -impl FILE              Treat the input as a .ml file
+  -intf FILE              Treat the input as a .mli file
+  -no-check               Disable checks (unsafe)
+  -debug-attribute-drop   Debug attribute dropping
+  -print-transformations  Print linked-in code transformations, in the order they are applied
+  -apply NAMES            Apply these transformations in order (comma-separated list)
+  -help                   Display this list of options
+  --help                  Display this list of options
 ```
 
 When passed a file as argument, a ppx driver will pretty-print the
