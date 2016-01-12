@@ -13,35 +13,53 @@ let perform_checks = ref true
 let debug_attribute_drop = ref false
 let apply_list = ref None
 
-type code_transformation =
-  { name          : string
-  ; impl          : (Parsetree.structure -> Parsetree.structure)
-  ; intf          : (Parsetree.signature -> Parsetree.signature)
-  ; registered_at : Caller_id.t
-  }
+module Transform = struct
+  type t =
+    { name          : string
+    ; impl          : (Parsetree.structure -> Parsetree.structure) option
+    ; intf          : (Parsetree.signature -> Parsetree.signature) option
+    ; extensions    : Extension.V2.t list
+    ; registered_at : Caller_id.t
+    }
 
-let code_transformations = ref []
+  let all : t list ref = ref []
 
-let print_caller_id oc (caller_id : Caller_id.t) =
-  match caller_id with
-  | None -> output_string oc "<unknown location>"
-  | Some loc -> Printf.fprintf oc "%s:%d" loc.filename loc.line_number
-;;
+  let print_caller_id oc (caller_id : Caller_id.t) =
+    match caller_id with
+    | None -> output_string oc "<unknown location>"
+    | Some loc -> Printf.fprintf oc "%s:%d" loc.filename loc.line_number
+  ;;
+
+  let register ?(extensions=[]) ?impl ?intf name =
+    let caller_id = Caller_id.get ~skip:[__FILE__] in
+    begin match List.filter !all ~f:(fun ct -> ct.name = name) with
+    | [] -> ()
+    | ct :: _ ->
+      Printf.eprintf "Warning: code transformation %s registered twice.\n" name;
+      Printf.eprintf "  - first time was at %a\n" print_caller_id ct.registered_at;
+      Printf.eprintf "  - second time is at %a\n" print_caller_id caller_id;
+    end;
+    let ct = { name; extensions; impl; intf; registered_at = caller_id } in
+    all := ct :: !all
+  ;;
+
+  let builtin_of_extensions extensions =
+    let map = new Extension.V2.map_top_down extensions in
+    { name = "<extensions>"
+    ; impl = Some (fun st -> map#structure (File_path.get_default_path_str st) st)
+    ; intf = Some (fun sg -> map#signature (File_path.get_default_path_sig sg) sg)
+    ; extensions = []
+    ; registered_at = Caller_id.get ~skip:[]
+    }
+end
+
+let register_transformation = Transform.register
 
 let register_code_transformation ~name ~impl ~intf =
-  let caller_id = Caller_id.get ~skip:[__FILE__] in
-  begin match List.filter !code_transformations ~f:(fun ct -> ct.name = name) with
-  | [] -> ()
-  | ct :: _ ->
-    Printf.eprintf "Warning: code transformation %s registered twice.\n" name;
-    Printf.eprintf "  - first time was at %a\n" print_caller_id ct.registered_at;
-    Printf.eprintf "  - second time is at %a\n" print_caller_id caller_id;
-  end;
-  let ct = { name; impl; intf; registered_at = caller_id } in
-  code_transformations := ct :: !code_transformations
+  register_transformation name ~impl ~intf
 ;;
 
-let debug_dropped_attribute ct ~old_dropped ~new_dropped =
+let debug_dropped_attribute name ~old_dropped ~new_dropped =
   let print_diff what a b =
     let diff =
       List.filter a ~f:(fun (name : _ Location.loc) ->
@@ -49,7 +67,7 @@ let debug_dropped_attribute ct ~old_dropped ~new_dropped =
     in
     if diff <> [] then begin
       Format.eprintf "The following attributes %s after applying %s:\n"
-        what ct.name;
+        what name;
       List.iter diff ~f:(fun { Location. txt; loc } ->
         Format.eprintf "- %a: %s\n" Location.print_loc loc txt);
       Format.eprintf "@."
@@ -62,22 +80,34 @@ let debug_dropped_attribute ct ~old_dropped ~new_dropped =
 let apply_transforms ~field ~dropped_so_far x =
   let cts =
     match !apply_list with
-    | None -> List.rev !code_transformations
+    | None -> List.rev !Transform.all
     | Some names ->
       List.map names ~f:(fun name ->
-        List.find !code_transformations ~f:(fun ct -> ct.name = name))
+        List.find !Transform.all ~f:(fun (ct : Transform.t) ->
+          ct.name = name))
   in
-  List.fold_left cts ~init:(x, []) ~f:(fun (x, dropped) ct ->
-    let x = field ct x in
-    let dropped =
-      if !debug_attribute_drop then begin
-        let new_dropped = dropped_so_far x in
-        debug_dropped_attribute ct ~old_dropped:dropped ~new_dropped;
-        new_dropped
-      end else
-        []
+  let cts =
+    let all_extensions =
+      List.map cts ~f:(fun (ct : Transform.t) -> ct.extensions) |> List.concat
     in
-    (x, dropped))
+    match all_extensions with
+    | [] -> cts
+    | _  -> Transform.builtin_of_extensions all_extensions :: cts
+  in
+  List.fold_left cts ~init:(x, []) ~f:(fun (x, dropped) (ct : Transform.t) ->
+    match field ct with
+    | None -> (x, dropped)
+    | Some f ->
+      let x = f x in
+      let dropped =
+        if !debug_attribute_drop then begin
+          let new_dropped = dropped_so_far x in
+          debug_dropped_attribute ct.name ~old_dropped:dropped ~new_dropped;
+          new_dropped
+        end else
+          []
+      in
+      (x, dropped))
   |> fst
 ;;
 
@@ -89,7 +119,7 @@ let map_structure st =
       st
   in
   let st =
-    apply_transforms st ~field:(fun ct -> ct.impl)
+    apply_transforms st ~field:(fun (ct : Transform.t) -> ct.impl)
       ~dropped_so_far:Attribute.dropped_so_far_structure
   in
   if !perform_checks then begin
@@ -149,7 +179,7 @@ module Kind = struct
     | Impl : Parsetree.structure t
   ;;
 
-  type packed = T : _ t -> packed
+  type packed = T : _ list t -> packed
 
   let of_filename fn =
     if Filename.check_suffix fn ".ml" then
@@ -247,12 +277,24 @@ type output_mode =
   | Dump_ast
   | Dparsetree
 
-let process_file : type a. a Kind.t -> _ = fun kind fn ~input_name ~output_mode ~output ->
-  let ast = with_input fn ~f:(load_input kind fn input_name) in
-  let ast : a =
-    match kind with
-    | Kind.Intf -> map_signature ast
-    | Kind.Impl -> map_structure ast
+let process_file : type a. a list Kind.t -> _ = fun kind fn ~input_name ~output_mode ~output ->
+  let ast : a list =
+    try
+      let ast = with_input fn ~f:(load_input kind fn input_name) in
+      match kind with
+      | Kind.Intf -> map_signature ast
+      | Kind.Impl -> map_structure ast
+    with exn when output_mode = Dump_ast ->
+    match Location.error_of_exn exn with
+    | None -> raise exn
+    | Some error ->
+      let mk_ext : loc:_ -> _ -> _ -> a =
+        let open Ast_builder.Default in
+        match kind with
+        | Kind.Intf -> psig_extension
+        | Kind.Impl -> pstr_extension
+      in
+      [ mk_ext ~loc:Location.none (Ast_mapper.extension_of_error error) [] ]
   in
   let null_ast =
     match kind with
@@ -301,8 +343,8 @@ let set_output_mode mode =
 ;;
 
 let print_transformations () =
-  List.iter !code_transformations ~f:(fun ct ->
-    Printf.eprintf "%s\n" ct.name);
+  List.iter !Transform.all ~f:(fun (ct : Transform.t) ->
+    Printf.printf "%s\n" ct.name);
   exit 0
 ;;
 
@@ -317,7 +359,8 @@ let set_apply_list s =
   in
   let names = if s = "" then [] else split 0 0 in
   List.iter names ~f:(fun name ->
-    if not (List.exists !code_transformations ~f:(fun ct -> ct.name = name)) then
+    if not (List.exists !Transform.all ~f:(fun (ct : Transform.t) ->
+      ct.name = name)) then
       raise (Arg.Bad (Printf.sprintf "code transformation '%s' does not exist" name)));
   apply_list := Some names
 ;;
@@ -329,6 +372,8 @@ let standalone_args =
     " Run as a -ppx rewriter (must be the first argument)"
   ; "-o", Arg.String (fun s -> output := Some s),
     "<filename> Output file (use '-' for stdout)"
+  ; "-reserve-namespace", Arg.String Attribute.reserve_namespace,
+    "<string> Mark the given namespace as reserved"
   ; "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
     "<string> File name to use in locations"
   ; "-no-optcomp", Arg.Clear use_optcomp,
