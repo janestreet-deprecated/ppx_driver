@@ -60,3 +60,6 @@ val standalone : unit -> unit
 
 (** Suitable for -ppx. Used only for the public release. *)
 val run_as_ppx_rewriter : unit -> unit
+
+(**/**)
+val map_structure : structure -> structure

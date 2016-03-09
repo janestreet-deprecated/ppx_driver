@@ -1,0 +1,69 @@
+(* -*- tuareg -*- *)
+
+#directory "+compiler-libs";;
+open Ppx_core.Std
+
+let x = 1 [@@foo]
+[%%expect{|
+Line _, characters 13-16:
+Attribute `foo' was not used
+|}];;
+
+let f x = 1 [@@deprecatd "..."]
+[%%expect{|
+Line _, characters 15-24:
+Attribute `deprecatd' was not used.
+Hint: Did you mean deprecated?
+|}];;
+
+let attr : _ Attribute.t =
+  Attribute.declare "blah"
+    Attribute.Context.type_declaration
+    Ast_pattern.(__)
+    ignore
+
+type t = int [@blah]
+[%%expect{|
+Line _, characters 15-19:
+Attribute `blah' was not used.
+Hint: `blah' is available for type declarations but is used here in the
+context of a core type.
+Did you put it at the wrong level?
+|}];;
+
+let attr : _ Attribute.t =
+  Attribute.declare "blah"
+    Attribute.Context.expression
+    Ast_pattern.(__)
+    ignore
+
+type t = int [@blah]
+[%%expect{|
+Line _, characters 15-19:
+Attribute `blah' was not used.
+Hint: `blah' is available for expressions and type declarations but is used
+here in the context of a core type.
+Did you put it at the wrong level?
+|}];;
+
+(* Attribute drops *)
+
+let faulty_transformation = object
+  inherit Ast_traverse.map as super
+
+  method! expression e =
+    match e.pexp_desc with
+    | Pexp_constant c ->
+      Ast_builder.Default.pexp_constant ~loc:e.pexp_loc c
+    | _ -> super#expression e
+end
+let () =
+  Ppx_driver.register_transformation "faulty" ~impl:faulty_transformation#structure
+
+let x = (42 [@foo])
+[%%expect{|
+Line _, characters 14-17:
+Attribute `foo' was silently dropped
+|}];;
+
+(* vim: set ft=ocaml: *)

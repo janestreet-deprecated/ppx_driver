@@ -113,9 +113,10 @@ let apply_transforms ~field ~dropped_so_far x =
 
 let map_structure st =
   let st =
-    if !perform_checks then
+    if !perform_checks then begin
+      Attribute.reset_checks ();
       Attribute.freshen_and_collect#structure st
-    else
+    end else
       st
   in
   let st =
@@ -132,9 +133,10 @@ let map_structure st =
 
 let map_signature sg =
   let sg =
-    if !perform_checks then
+    if !perform_checks then begin
+      Attribute.reset_checks ();
       Attribute.freshen_and_collect#signature sg
-    else
+    end else
       sg
   in
   let sg =
