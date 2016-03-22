@@ -111,6 +111,24 @@ let apply_transforms ~field ~dropped_so_far x =
   |> fst
 ;;
 
+let remove_empty_lets = object
+  inherit Ast_traverse.map as super
+
+  method! structure_item st =
+    let st = super#structure_item st in
+    match st.pstr_desc with
+    | Pstr_value (_, []) ->
+      let (module B) = Ast_builder.make st.pstr_loc in
+      B.pstr_value Nonrecursive [B.value_binding ~pat:B.punit ~expr:B.eunit]
+    | _ -> st
+
+  method! expression e =
+    let e = super#expression e in
+    match e.pexp_desc with
+    | Pexp_let (_, [], e) -> e
+    | _ -> e
+end
+
 let map_structure st =
   let st =
     if !perform_checks then begin
@@ -123,6 +141,7 @@ let map_structure st =
     apply_transforms st ~field:(fun (ct : Transform.t) -> ct.impl)
       ~dropped_so_far:Attribute.dropped_so_far_structure
   in
+  let st = remove_empty_lets#structure st in
   if !perform_checks then begin
     Attribute.check_unused#structure st;
     Extension.check_unused#structure st;
@@ -143,6 +162,7 @@ let map_signature sg =
     apply_transforms sg ~field:(fun ct -> ct.intf)
       ~dropped_so_far:Attribute.dropped_so_far_signature
   in
+  let sg = remove_empty_lets#signature sg in
   if !perform_checks then begin
     Attribute.check_unused#signature sg;
     Extension.check_unused#signature sg;
