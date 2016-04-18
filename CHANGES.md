@@ -1,3 +1,8 @@
+## 113.33.01+4.03
+
+Remove hack which prevented empty value bindings to leak. We fixed the
+generators so they don't create them in the first place.
+
 ## 113.33.00+4.03
 
 Various updates to work with OCaml 4.03.0
