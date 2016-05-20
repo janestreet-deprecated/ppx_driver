@@ -3,6 +3,18 @@ open Ppx_core.Std
 
 module Caller_id = Ppx_core.Caller_id
 
+module List = struct
+  include List
+
+  let rec filter_map l ~f =
+    match l with
+    | [] -> []
+    | x :: l ->
+      match f x with
+      | None -> filter_map l ~f
+      | Some x -> x :: filter_map l ~f
+end
+
 let exe_name = Filename.basename Sys.executable_name
 
 let args = ref []
@@ -12,13 +24,19 @@ let add_arg key spec ~doc = args := (key, spec, doc) :: !args
 let perform_checks = ref true
 let debug_attribute_drop = ref false
 let apply_list = ref None
+let preprocessor = ref None
+let no_merge = ref false
+let request_print_passes = ref false
+let request_print_transformations = ref false
 
 module Transform = struct
   type t =
     { name          : string
     ; impl          : (Parsetree.structure -> Parsetree.structure) option
     ; intf          : (Parsetree.signature -> Parsetree.signature) option
-    ; extensions    : Extension.V2.t list
+    ; enclose_impl  : (Location.t option -> Parsetree.structure * Parsetree.structure) option
+    ; enclose_intf  : (Location.t option -> Parsetree.signature * Parsetree.signature) option
+    ; rules         : Context_free.Rule.t list
     ; registered_at : Caller_id.t
     }
 
@@ -30,7 +48,11 @@ module Transform = struct
     | Some loc -> Printf.fprintf oc "%s:%d" loc.filename loc.line_number
   ;;
 
-  let register ?(extensions=[]) ?impl ?intf name =
+  let register ?(extensions=[]) ?(rules=[]) ?enclose_impl ?enclose_intf
+        ?impl ?intf name =
+    let rules =
+      List.map extensions ~f:Context_free.Rule.extension @ rules
+    in
     let caller_id = Caller_id.get ~skip:[__FILE__] in
     begin match List.filter !all ~f:(fun ct -> ct.name = name) with
     | [] -> ()
@@ -39,18 +61,88 @@ module Transform = struct
       Printf.eprintf "  - first time was at %a\n" print_caller_id ct.registered_at;
       Printf.eprintf "  - second time is at %a\n" print_caller_id caller_id;
     end;
-    let ct = { name; extensions; impl; intf; registered_at = caller_id } in
+    let ct =
+      { name
+      ; rules
+      ; enclose_impl
+      ; enclose_intf
+      ; impl
+      ; intf
+      ; registered_at = caller_id
+      }
+    in
     all := ct :: !all
   ;;
 
-  let builtin_of_extensions extensions =
-    let map = new Extension.V2.map_top_down extensions in
-    { name = "<extensions>"
-    ; impl = Some (fun st -> map#structure (File_path.get_default_path_str st) st)
-    ; intf = Some (fun sg -> map#signature (File_path.get_default_path_sig sg) sg)
-    ; extensions = []
-    ; registered_at = Caller_id.get ~skip:[]
+  let rec last prev l =
+    match l with
+    | [] -> prev
+    | x :: l -> last x l
+  ;;
+
+  let loc_of_list ~get_loc l =
+    match l with
+    | [] -> None
+    | x :: l ->
+      let first : Location.t = get_loc x in
+      let last = get_loc (last x l) in
+      Some { first with loc_end = last.loc_end }
+  ;;
+
+  let merge_into_generic_mappers t =
+    let { rules; enclose_impl; enclose_intf; impl; intf; _ } = t in
+    let map = new Context_free.map_top_down rules in
+    let map_impl st =
+      let st =
+        let header, footer =
+          match enclose_impl with
+          | None   -> ([], [])
+          | Some f ->
+            let whole_loc = loc_of_list st ~get_loc:(fun st -> st.Parsetree.pstr_loc) in
+            f whole_loc
+        in
+        let st = map#structure (File_path.get_default_path_str st) st in
+        match header, footer with
+        | [], [] -> st
+        | _      -> List.concat [ header; st; footer ]
+      in
+      match impl with
+      | None -> st
+      | Some f -> f st
+    in
+    let map_intf sg =
+      let sg =
+        let header, footer =
+          match enclose_intf with
+          | None   -> ([], [])
+          | Some f ->
+            let whole_loc = loc_of_list sg ~get_loc:(fun sg -> sg.Parsetree.psig_loc) in
+            f whole_loc
+        in
+        let sg = map#signature (File_path.get_default_path_sig sg) sg in
+        match header, footer with
+        | [], [] -> sg
+        | _      -> List.concat [ header; sg; footer ]
+      in
+      match intf with
+      | None -> sg
+      | Some f -> f sg
+    in
+    { t with
+      impl = Some map_impl
+    ; intf = Some map_intf
     }
+
+  let builtin_of_context_free_rewriters ~rules ~enclose_impl ~enclose_intf =
+    merge_into_generic_mappers
+      { name = "<bultin:context-free>"
+      ; impl = None
+      ; intf = None
+      ; enclose_impl
+      ; enclose_intf
+      ; rules
+      ; registered_at = Caller_id.get ~skip:[]
+      }
 end
 
 let register_transformation = Transform.register
@@ -77,7 +169,7 @@ let debug_dropped_attribute name ~old_dropped ~new_dropped =
   print_diff "reappeared"  old_dropped new_dropped
 ;;
 
-let apply_transforms ~field ~dropped_so_far x =
+let get_whole_ast_passes () =
   let cts =
     match !apply_list with
     | None -> List.rev !Transform.all
@@ -87,13 +179,64 @@ let apply_transforms ~field ~dropped_so_far x =
           ct.name = name))
   in
   let cts =
-    let all_extensions =
-      List.map cts ~f:(fun (ct : Transform.t) -> ct.extensions) |> List.concat
-    in
-    match all_extensions with
-    | [] -> cts
-    | _  -> Transform.builtin_of_extensions all_extensions :: cts
+    if !no_merge then
+      List.map cts ~f:Transform.merge_into_generic_mappers
+    else begin
+      let get_enclosers ~f =
+        List.filter_map cts ~f:(fun (ct : Transform.t) ->
+          match f ct with
+          | None -> None
+          | Some x -> Some (ct.name, x))
+        (* Sort them to ensure deterministic ordering *)
+        |> List.sort ~cmp:(fun (a, _) (b, _) -> String.compare a b)
+        |> List.map ~f:snd
+      in
+
+      let rules =
+        List.map cts ~f:(fun (ct : Transform.t) -> ct.rules) |> List.concat
+      and impl_enclosers =
+        get_enclosers ~f:(fun ct -> ct.enclose_impl)
+      and intf_enclosers =
+        get_enclosers ~f:(fun ct -> ct.enclose_intf)
+      in
+      match rules, impl_enclosers, intf_enclosers with
+      | [], [], [] -> cts
+      | _              ->
+        let merge_encloser = function
+          | [] -> None
+          | enclosers -> Some (fun loc ->
+            let headers, footers =
+              List.map enclosers ~f:(fun f -> f loc)
+              |> List.split
+            in
+            let headers = List.concat headers in
+            let footers = List.concat (List.rev footers) in
+            (headers, footers))
+        in
+        Transform.builtin_of_context_free_rewriters ~rules
+          ~enclose_impl:(merge_encloser impl_enclosers)
+          ~enclose_intf:(merge_encloser intf_enclosers)
+        :: cts
+    end
   in
+  List.filter cts ~f:(fun (ct : Transform.t) ->
+    match ct.impl, ct.intf with
+    | None, None -> false
+    | _          -> true)
+;;
+
+let print_passes () =
+  let cts = get_whole_ast_passes () in
+  if !perform_checks then
+    Printf.printf "<builtin:freshen-and-collect-attributes>\n";
+  List.iter cts ~f:(fun ct -> Printf.printf "%s\n" ct.Transform.name);
+  if !perform_checks then
+    Printf.printf "<builtin:check-unused-attributes>\n\
+                   <builtin:check-unused-extensions>\n";
+;;
+
+let apply_transforms ~field ~dropped_so_far x =
+  let cts = get_whole_ast_passes () in
   List.fold_left cts ~init:(x, []) ~f:(fun (x, dropped) (ct : Transform.t) ->
     match field ct with
     | None -> (x, dropped)
@@ -229,14 +372,47 @@ let with_output fn ~binary ~f =
     | exception e -> close_out oc; raise e
 ;;
 
-let with_input fn ~f =
-  if fn = "-" then
-    f stdin
-  else
-    let ic = open_in_bin fn in
-    match f ic with
-    | v -> close_in ic; v
-    | exception e -> close_in ic; raise e
+exception Pp_error of string
+
+let report_pp_error ppf cmd =
+  Format.fprintf ppf "Error while running external preprocessor@.\
+                      Command line: %s@." cmd
+
+let () =
+  Location.register_error_of_exn
+    (function
+      | Pp_error cmd -> Some (Location.error_of_printer_file report_pp_error cmd)
+      | _ -> None)
+
+let remove_no_error fn =
+  try Sys.remove fn with Sys_error _ -> ()
+
+let protectx x ~f ~finally =
+  match f x with
+  | v -> finally x; v
+  | exception e -> finally x; raise e
+;;
+
+let with_preprocessed_file fn ~f =
+  match !preprocessor with
+  | None -> f fn
+  | Some pp ->
+    protectx (Filename.temp_file "ocamlpp" "")
+      ~finally:remove_no_error
+      ~f:(fun tmpfile ->
+        let comm =
+          Printf.sprintf "%s %s > %s"
+            pp (if fn = "-" then "" else Filename.quote fn) (Filename.quote tmpfile)
+        in
+        if Sys.command comm <> 0 then raise (Pp_error comm);
+        f tmpfile)
+
+let with_preprocessed_input fn ~f =
+  with_preprocessed_file fn ~f:(fun fn ->
+    if fn = "-" then
+      f stdin
+    else
+      protectx (open_in_bin fn) ~f ~finally:close_in)
 ;;
 
 let relocate = object
@@ -282,7 +458,7 @@ type output_mode =
 let process_file : type a. a list Kind.t -> _ = fun kind fn ~input_name ~output_mode ~output ->
   let ast : a list =
     try
-      let ast = with_input fn ~f:(load_input kind fn input_name) in
+      let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
       match kind with
       | Kind.Intf -> map_signature ast
       | Kind.Impl -> map_structure ast
@@ -347,7 +523,6 @@ let set_output_mode mode =
 let print_transformations () =
   List.iter !Transform.all ~f:(fun (ct : Transform.t) ->
     Printf.printf "%s\n" ct.name);
-  exit 0
 ;;
 
 let set_apply_list s =
@@ -379,7 +554,7 @@ let standalone_args =
   ; "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
     "<string> File name to use in locations"
   ; "-no-optcomp", Arg.Clear use_optcomp,
-    " Do not use optcomp"
+    " Do not use optcomp (default if the input or output of -pp is a binary AST)"
   ; "-dump-ast", Arg.Unit (fun () -> set_output_mode Dump_ast),
     " Dump the marshaled ast to the output file instead of pretty-printing it"
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
@@ -392,10 +567,16 @@ let standalone_args =
     " Disable checks (unsafe)"
   ; "-debug-attribute-drop", Arg.Set debug_attribute_drop,
     " Debug attribute dropping"
-  ; "-print-transformations", Arg.Unit print_transformations,
+  ; "-print-transformations", Arg.Set request_print_transformations,
     " Print linked-in code transformations, in the order they are applied"
+  ; "-print-passes", Arg.Set request_print_passes,
+    " Print the actual passes over the whole AST in the order they are applied"
   ; "-apply", Arg.String set_apply_list,
     "<names> Apply these transformations in order (comma-separated list)"
+  ; "-no-merge", Arg.Set no_merge,
+    " Do not merge context free transformations (better for debugging rewriters)"
+  ; "-pp", Arg.String (fun s -> preprocessor := Some s),
+    "<command>  Pipe sources through preprocessor <command> (incompatible with -as-ppx)"
   ]
 ;;
 
@@ -416,6 +597,14 @@ let standalone_main () =
     | Some _ -> raise (Arg.Bad "too many input files")
   in
   Arg.parse (Arg.align args) anon usage;
+  if !request_print_transformations then begin
+    print_transformations ();
+    exit 0;
+  end;
+  if !request_print_passes then begin
+    print_passes ();
+    exit 0;
+  end;
   if !use_optcomp then Lexer.set_preprocessor Optcomp.init Optcomp.map_lexer;
   match !input with
   | None    -> Printf.eprintf "%s: no input file given\n%!" exe_name
