@@ -549,7 +549,7 @@ let standalone_args =
     " Run as a -ppx rewriter (must be the first argument)"
   ; "-o", Arg.String (fun s -> output := Some s),
     "<filename> Output file (use '-' for stdout)"
-  ; "-reserve-namespace", Arg.String Attribute.reserve_namespace,
+  ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
     "<string> Mark the given namespace as reserved"
   ; "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
     "<string> File name to use in locations"
