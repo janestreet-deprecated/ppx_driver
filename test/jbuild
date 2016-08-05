@@ -1,0 +1,2 @@
+(toplevel_expect_tests
+ ((libraries (ppx_driver))))
