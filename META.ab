@@ -7,6 +7,17 @@ plugin(byte  ) = "ppx_driver.cma"
 plugin(native) = "ppx_driver.cmxs"
 exists_if = "ppx_driver.cma"
 
+package "inside-base" (
+  version = "$(pkg_version)"
+  description = ""
+  requires = "ppx_driver"
+  archive(byte  ) = "ppx_inside_base.cma"
+  archive(native) = "ppx_inside_base.cmxa"
+  plugin(byte  ) = "ppx_inside_base.cma"
+  plugin(native) = "ppx_inside_base.cmxs"
+  exists_if = "ppx_inside_base.cma"
+)
+
 package "ocamlbuild" (
   version = "$(pkg_version)"
   description = ""

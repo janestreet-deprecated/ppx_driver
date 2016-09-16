@@ -8,5 +8,6 @@ generate ~package:"ppx_driver"
   ; oasis_lib "ppx_driver_ocamlbuild"
   ; oasis_lib "ppx_driver_runner"
   ; oasis_lib "ppx_driver_runner_as_ppx"
+  ; oasis_lib "ppx_inside_base"
   ; file "META" ~section:"lib"
   ]
