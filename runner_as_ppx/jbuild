@@ -2,8 +2,7 @@
 ;; be linked after all other libraries and units.
 (library
  ((name ppx_driver_runner_as_ppx)
-  (wrapped false)
   (public_name ppx_driver.runner_as_ppx)
   (library_flags (-linkall))
   (libraries (ppx_driver))
-  (preprocess ((no_preprocessing All)))))
+  (preprocess no_preprocessing)))

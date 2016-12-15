@@ -1,2 +1,22 @@
+(library
+ ((name ppx_driver_test)
+  (libraries (core_kernel))
+  (modules (test))
+  (lint (pps (ppx_sexp_conv ppx_compare -pretty)))
+  (preprocess no_preprocessing)))
+
 (toplevel_expect_tests
  ((libraries (ppx_driver))))
+
+(alias
+ ((name     runtest)
+  (deps    (example.ml.pp.expected example.ml.pp))
+  (action  "patdiff -ascii ${^}")))
+
+(rule
+ ((deps    (../../ppx_jane/bin/main.exe example.ml))
+  (targets (example.ml.pp))
+  (action  "${^} -inline-test-lib foo -reconcile \
+            -dirname blah -loc-filename example.ml -o ${@}")))
+
+(enforce_style ())

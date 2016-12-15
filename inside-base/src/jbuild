@@ -1,6 +1,0 @@
-(library
- ((name ppx_inside_base)
-  (public_name ppx_driver.inside-base)
-  (wrapped false)
-  (libraries (ppx_driver))
-  (preprocess ((no_preprocessing All)))))

@@ -78,5 +78,9 @@ val standalone : unit -> unit
 (** Suitable for -ppx. Used only for the public release. *)
 val run_as_ppx_rewriter : unit -> unit
 
+(** If [true], code transformations should avoid generating code that is not strictly
+    necessary, such as extra type annotations. *)
+val pretty : unit -> bool
+
 (**/**)
 val map_structure : structure -> structure

@@ -1,5 +1,6 @@
 open StdLabels
 open Ppx_core.Std
+open Import
 
 module Caller_id = Ppx_core.Caller_id
 
@@ -28,6 +29,10 @@ let preprocessor = ref None
 let no_merge = ref false
 let request_print_passes = ref false
 let request_print_transformations = ref false
+let use_color = ref true
+let diff_command = ref None
+let pretty = ref false
+let styler = ref None
 
 module Transform = struct
   type t =
@@ -89,9 +94,37 @@ module Transform = struct
       Some { first with loc_end = last.loc_end }
   ;;
 
-  let merge_into_generic_mappers t =
+  let merge_into_generic_mappers t ~hook ~expect_mismatch_handler =
     let { rules; enclose_impl; enclose_intf; impl; intf; _ } = t in
-    let map = new Context_free.map_top_down rules in
+    let map =
+      new Context_free.map_top_down rules
+        ~generated_code_hook:hook
+        ~expect_mismatch_handler
+    in
+    let gen_header_and_footer context whole_loc f =
+      let header, footer = f whole_loc in
+      (match whole_loc with
+      | Some (loc : Location.t) ->
+        let loc_header = { loc with loc_end   = loc.loc_start } in
+        let loc_footer = { loc with loc_start = loc.loc_end   } in
+        (match header with [] -> () | _ -> hook.f context loc_header (Many header));
+        (match footer with [] -> () | _ -> hook.f context loc_footer (Many footer))
+      | None ->
+        match header @ footer with
+        | [] -> ()
+        | l ->
+          let pos =
+            { Lexing.
+              pos_fname = ""
+            ; pos_lnum  = 1
+            ; pos_bol   = 0
+            ; pos_cnum  = 0
+            }
+          in
+          let loc = { Location. loc_start = pos; loc_end = pos; loc_ghost = false } in
+          hook.f context loc (Many l));
+      (header, footer)
+    in
     let map_impl st =
       let st =
         let header, footer =
@@ -99,7 +132,7 @@ module Transform = struct
           | None   -> ([], [])
           | Some f ->
             let whole_loc = loc_of_list st ~get_loc:(fun st -> st.Parsetree.pstr_loc) in
-            f whole_loc
+            gen_header_and_footer Structure_item whole_loc f
         in
         let st = map#structure (File_path.get_default_path_str st) st in
         match header, footer with
@@ -117,7 +150,7 @@ module Transform = struct
           | None   -> ([], [])
           | Some f ->
             let whole_loc = loc_of_list sg ~get_loc:(fun sg -> sg.Parsetree.psig_loc) in
-            f whole_loc
+            gen_header_and_footer Signature_item whole_loc f
         in
         let sg = map#signature (File_path.get_default_path_sig sg) sg in
         match header, footer with
@@ -133,8 +166,8 @@ module Transform = struct
     ; intf = Some map_intf
     }
 
-  let builtin_of_context_free_rewriters ~rules ~enclose_impl ~enclose_intf =
-    merge_into_generic_mappers
+  let builtin_of_context_free_rewriters ~hook ~rules ~enclose_impl ~enclose_intf =
+    merge_into_generic_mappers ~hook
       { name = "<bultin:context-free>"
       ; impl = None
       ; intf = None
@@ -169,7 +202,7 @@ let debug_dropped_attribute name ~old_dropped ~new_dropped =
   print_diff "reappeared"  old_dropped new_dropped
 ;;
 
-let get_whole_ast_passes () =
+let get_whole_ast_passes ~hook ~expect_mismatch_handler =
   let cts =
     match !apply_list with
     | None -> List.rev !Transform.all
@@ -180,7 +213,8 @@ let get_whole_ast_passes () =
   in
   let cts =
     if !no_merge then
-      List.map cts ~f:Transform.merge_into_generic_mappers
+      List.map cts ~f:(Transform.merge_into_generic_mappers ~hook
+                         ~expect_mismatch_handler)
     else begin
       let get_enclosers ~f =
         List.filter_map cts ~f:(fun (ct : Transform.t) ->
@@ -213,7 +247,7 @@ let get_whole_ast_passes () =
             let footers = List.concat (List.rev footers) in
             (headers, footers))
         in
-        Transform.builtin_of_context_free_rewriters ~rules
+        Transform.builtin_of_context_free_rewriters ~rules ~hook ~expect_mismatch_handler
           ~enclose_impl:(merge_encloser impl_enclosers)
           ~enclose_intf:(merge_encloser intf_enclosers)
         :: cts
@@ -226,7 +260,10 @@ let get_whole_ast_passes () =
 ;;
 
 let print_passes () =
-  let cts = get_whole_ast_passes () in
+  let cts =
+    get_whole_ast_passes ~hook:Context_free.Generated_code_hook.nop
+      ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
+  in
   if !perform_checks then
     Printf.printf "<builtin:freshen-and-collect-attributes>\n";
   List.iter cts ~f:(fun ct -> Printf.printf "%s\n" ct.Transform.name);
@@ -235,8 +272,8 @@ let print_passes () =
                    <builtin:check-unused-extensions>\n";
 ;;
 
-let apply_transforms ~field ~dropped_so_far x =
-  let cts = get_whole_ast_passes () in
+let apply_transforms ~field ~dropped_so_far ~hook ~expect_mismatch_handler x =
+  let cts = get_whole_ast_passes ~hook ~expect_mismatch_handler in
   List.fold_left cts ~init:(x, []) ~f:(fun (x, dropped) (ct : Transform.t) ->
     match field ct with
     | None -> (x, dropped)
@@ -254,7 +291,7 @@ let apply_transforms ~field ~dropped_so_far x =
   |> fst
 ;;
 
-let map_structure st =
+let map_structure_gen st ~hook ~expect_mismatch_handler =
   let st =
     if !perform_checks then begin
       Attribute.reset_checks ();
@@ -264,7 +301,7 @@ let map_structure st =
   in
   let st =
     apply_transforms st ~field:(fun (ct : Transform.t) -> ct.impl)
-      ~dropped_so_far:Attribute.dropped_so_far_structure
+      ~dropped_so_far:Attribute.dropped_so_far_structure ~hook ~expect_mismatch_handler
   in
   if !perform_checks then begin
     Attribute.check_unused#structure st;
@@ -274,7 +311,11 @@ let map_structure st =
   st
 ;;
 
-let map_signature sg =
+let map_structure st =
+  map_structure_gen st ~hook:Context_free.Generated_code_hook.nop
+    ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
+
+let map_signature_gen sg ~hook ~expect_mismatch_handler =
   let sg =
     if !perform_checks then begin
       Attribute.reset_checks ();
@@ -284,7 +325,7 @@ let map_signature sg =
   in
   let sg =
     apply_transforms sg ~field:(fun ct -> ct.intf)
-      ~dropped_so_far:Attribute.dropped_so_far_signature
+      ~dropped_so_far:Attribute.dropped_so_far_signature ~hook ~expect_mismatch_handler
   in
   if !perform_checks then begin
     Attribute.check_unused#signature sg;
@@ -293,6 +334,10 @@ let map_signature sg =
   end;
   sg
 ;;
+
+let map_signature sg =
+  map_signature_gen sg ~hook:Context_free.Generated_code_hook.nop
+    ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
 
 let mapper =
   let structure _ st = map_structure st in
@@ -339,37 +384,41 @@ module Kind = struct
     | Impl -> Config.ast_impl_magic_number
     | Intf -> Config.ast_intf_magic_number
   ;;
+
+  let to_file_type : type a. a t -> Reconcile.file_type = function
+    | Intf -> Intf
+    | Impl -> Impl
+  ;;
 end
+
+let string_contains_binary_ast kind s =
+  let ast_magic = Kind.ast_magic kind in
+  String.sub s ~pos:0 ~len:9 = String.sub ast_magic ~pos:0 ~len:9
+
+type ast_file_test_result =
+  | Is_ast_file
+  | Isn't_ast_file of { prefix_read_from_file : string }
 
 let is_ast_file kind fn ic =
   let ast_magic = Kind.ast_magic kind in
-  try
-    let buffer = really_input_string ic (String.length ast_magic) in
-    if buffer = ast_magic then
-      true
-    else if String.sub buffer ~pos:0 ~len:9 = String.sub ast_magic ~pos:0 ~len:9 then
-      Location.raise_errorf ~loc:(Location.in_file fn)
-        "File is a binary ast for a different version of OCaml"
-    else
-      false
-  with _ ->
-    false
+  let ast_magic_len = String.length ast_magic in
+  let buffer = Bytes.create ast_magic_len in
+  let len = input ic buffer 0 ast_magic_len in
+  if len < ast_magic_len then
+    Isn't_ast_file { prefix_read_from_file = String.sub buffer ~pos:0 ~len }
+  else if buffer = ast_magic then
+    Is_ast_file
+  else if string_contains_binary_ast kind buffer then
+    Location.raise_errorf ~loc:(Location.in_file fn)
+      "File is a binary ast for a different version of OCaml"
+  else
+    Isn't_ast_file { prefix_read_from_file = buffer }
 ;;
 
 let output_ast oc kind ast =
   output_string oc (Kind.ast_magic kind);
   output_value oc !Location.input_name;
   output_value oc ast;
-;;
-
-let with_output fn ~binary ~f =
-  match fn with
-  | None | Some "-" -> f stdout
-  | Some fn ->
-    let oc = if binary then open_out_bin fn else open_out fn in
-    match f oc with
-    | v -> close_out oc; v
-    | exception e -> close_out oc; raise e
 ;;
 
 exception Pp_error of string
@@ -428,7 +477,8 @@ end
 let load_input : type a. a Kind.t -> string -> string -> in_channel -> a =
   fun kind fn input_name ic ->
     Location.input_name := input_name;
-    if is_ast_file kind fn ic then begin
+    match is_ast_file kind fn ic with
+    | Is_ast_file ->
       let ast_input_name : string = input_value ic in
       let ast : a = input_value ic in
       if ast_input_name = input_name then
@@ -440,68 +490,155 @@ let load_input : type a. a Kind.t -> string -> string -> in_channel -> a =
           | Kind.Impl -> relocate#structure
         in
         relocate (ast_input_name, input_name) ast
-    end else begin
-      seek_in ic 0;
+    | Isn't_ast_file { prefix_read_from_file } ->
+      (* To test if a file is an AST file, we have to read the first few bytes of the
+         file. If it is not, we have to parse these bytes and the rest of the file as
+         source code.
+
+         The compiler just does [seek_on 0] in this case, however this doesn't work when
+         the input is a pipe.
+
+         What we do instead is create a lexing buffer from the input channel and pre-fill
+         it with what we read to do the test. *)
       let lexbuf = Lexing.from_channel ic in
+      let len = String.length prefix_read_from_file in
+      String.blit ~src:prefix_read_from_file ~src_pos:0 ~dst:lexbuf.lex_buffer ~dst_pos:0
+        ~len;
+      lexbuf.lex_buffer_len <- len;
       Location.init lexbuf input_name;
       match kind with
-      | Kind.Intf -> Parse.interface      lexbuf
-      | Kind.Impl -> Parse.implementation lexbuf
-    end
+      | Kind.Intf -> Resrap.Parse.interface      lexbuf
+      | Kind.Impl -> Resrap.Parse.implementation lexbuf
+;;
+
+let load_source_file kind fn =
+  let s =
+    protectx (open_in_bin fn) ~finally:close_in ~f:(fun ic ->
+      really_input_string ic (in_channel_length ic))
+  in
+  if string_contains_binary_ast kind s then
+    Location.raise_errorf ~loc:(Location.in_file fn)
+      "ppx_driver: cannot use -reconcile with binary AST files";
+  s
 ;;
 
 type output_mode =
   | Pretty_print
   | Dump_ast
   | Dparsetree
+  | Reconcile of Reconcile.mode
+  | Null
 
-let process_file : type a. a list Kind.t -> _ = fun kind fn ~input_name ~output_mode ~output ->
-  let ast : a list =
-    try
-      let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
-      match kind with
-      | Kind.Intf -> map_signature ast
-      | Kind.Impl -> map_structure ast
-    with exn when output_mode = Dump_ast ->
-    match Location.error_of_exn exn with
-    | None -> raise exn
-    | Some error ->
-      let mk_ext : loc:_ -> _ -> _ -> a =
-        let open Ast_builder.Default in
+let process_file
+  : type a. a list Kind.t -> _
+  = fun kind fn ~input_name ~output_mode ~output ->
+    let replacements = ref [] in
+    let expect_mismatches = ref [] in
+    let add_to_list r x = r := x :: !r in
+    let hook : Context_free.Generated_code_hook.t =
+      match output_mode with
+      | Reconcile (Using_line_directives | Delimiting_generated_blocks) ->
+        { f = fun context (loc : Location.t) generated ->
+            add_to_list replacements
+              (Reconcile.Replacement.make ()
+                 ~context:(Extension context)
+                 ~start:loc.loc_start
+                 ~stop:loc.loc_end
+                 ~repl:generated)
+        }
+      | _ ->
+        Context_free.Generated_code_hook.nop
+    in
+    let expect_mismatch_handler : Context_free.Expect_mismatch_handler.t =
+      { f = fun context (loc : Location.t) generated ->
+          add_to_list expect_mismatches
+            (Reconcile.Replacement.make ()
+               ~context:(Floating_attribute context)
+               ~start:loc.loc_start
+               ~stop:loc.loc_end
+               ~repl:(Many generated)
+               ~is_expectation:true)
+      }
+    in
+
+    let ast : a list =
+      try
+        let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
         match kind with
-        | Kind.Intf -> psig_extension
-        | Kind.Impl -> pstr_extension
-      in
-      [ mk_ext ~loc:Location.none (Ast_mapper.extension_of_error error) [] ]
-  in
-  let null_ast =
-    match kind with
-    | Kind.Intf -> (match ast with [] -> true | _::_ -> false)
-    | Kind.Impl -> (match ast with [] -> true | _::_ -> false)
-  in
-  match output_mode with
-  | Pretty_print ->
-    with_output output ~binary:false ~f:(fun oc ->
-      let ppf = Format.formatter_of_out_channel oc in
-      (match kind with
-       | Kind.Intf -> Pprintast.signature ppf ast
-       | Kind.Impl -> Pprintast.structure ppf ast);
-      if not null_ast then Format.pp_print_newline ppf ())
-  | Dump_ast ->
-    with_output output ~binary:true ~f:(fun oc -> output_ast oc kind ast)
-  | Dparsetree ->
-    with_output output ~binary:false ~f:(fun oc ->
-      let ppf = Format.formatter_of_out_channel oc in
-      (match kind with
-       | Kind.Intf -> Printast.interface      ppf ast
-       | Kind.Impl -> Printast.implementation ppf ast);
-      Format.pp_print_newline ppf ())
+        | Kind.Intf -> map_signature_gen ast ~hook ~expect_mismatch_handler
+        | Kind.Impl -> map_structure_gen ast ~hook ~expect_mismatch_handler
+      with exn when output_mode = Dump_ast ->
+      match Location.error_of_exn exn with
+      | None -> raise exn
+      | Some error ->
+        let mk_ext : loc:_ -> _ -> _ -> a =
+          let open Ast_builder.Default in
+          match kind with
+          | Kind.Intf -> psig_extension
+          | Kind.Impl -> pstr_extension
+        in
+        [ mk_ext ~loc:Location.none (Ast_mapper.extension_of_error error) [] ]
+    in
+
+    let null_ast =
+      match kind with
+      | Kind.Intf -> (match ast with [] -> true | _::_ -> false)
+      | Kind.Impl -> (match ast with [] -> true | _::_ -> false)
+    in
+
+    let input_contents = lazy (load_source_file kind fn) in
+    let corrected = fn ^ ".corrected" in
+    let mismatches_found =
+      match !expect_mismatches with
+      | [] ->
+        if Sys.file_exists corrected then Sys.remove corrected;
+        false
+      | mismatches ->
+        Reconcile.reconcile mismatches ~contents:(Lazy.force input_contents)
+          ~output:(Some corrected) ~input_filename:fn ~input_name ~target:Corrected
+          ?styler:!styler ~file_type:(Kind.to_file_type kind);
+        true
+    in
+
+    (match output_mode with
+     | Null -> ()
+     | Pretty_print ->
+       with_output output ~binary:false ~f:(fun oc ->
+         let ppf = Format.formatter_of_out_channel oc in
+         (match kind with
+          | Kind.Intf -> Pprintast.signature ppf ast
+          | Kind.Impl -> Pprintast.structure ppf ast);
+         if not null_ast then Format.pp_print_newline ppf ())
+     | Dump_ast ->
+       with_output output ~binary:true ~f:(fun oc -> output_ast oc kind ast)
+     | Dparsetree ->
+       with_output output ~binary:false ~f:(fun oc ->
+         let ppf = Format.formatter_of_out_channel oc in
+         (match kind with
+          | Kind.Intf -> Printast.interface      ppf ast
+          | Kind.Impl -> Printast.implementation ppf ast);
+         Format.pp_print_newline ppf ())
+     | Reconcile mode ->
+       Reconcile.reconcile !replacements ~contents:(Lazy.force input_contents) ~output
+         ~input_filename:fn ~input_name ~target:(Output mode) ?styler:!styler
+         ~file_type:(Kind.to_file_type kind));
+
+    if mismatches_found then begin
+      Print_diff.print () ~file1:fn ~file2:corrected ~use_color:!use_color
+        ?diff_command:!diff_command;
+      exit 1
+    end
 ;;
 
 let loc_fname = ref None
 let output_mode = ref Pretty_print
 let output = ref None
 let kind = ref None
+let input = ref None
+let set_input fn =
+  match !input with
+  | None -> input := Some fn
+  | Some _ -> raise (Arg.Bad "too many input files")
 
 let set_kind k =
   let k = Kind.T k in
@@ -514,10 +651,21 @@ let set_output_mode mode =
   match !output_mode, mode with
   | Pretty_print, _ -> output_mode := mode
   | _, Pretty_print -> assert false
-  | Dump_ast  , Dump_ast
-  | Dparsetree, Dparsetree -> ()
-  | Dump_ast, Dparsetree
-  | Dparsetree, Dump_ast -> raise (Arg.Bad "-dump-ast and -dparsetree are incompatible")
+  | Dump_ast   , Dump_ast
+  | Dparsetree , Dparsetree -> ()
+  | Reconcile a, Reconcile b when a = b -> ()
+  | x, y ->
+    let arg_of_output_mode = function
+      | Pretty_print -> assert false
+      | Dump_ast                              -> "-dump-ast"
+      | Dparsetree                            -> "-dparsetree"
+      | Reconcile Using_line_directives       -> "-reconcile"
+      | Reconcile Delimiting_generated_blocks -> "-reconcile-with-comments"
+      | Null                                  -> "-null"
+    in
+    raise (Arg.Bad (Printf.sprintf
+                      "%s and %s are incompatible"
+                      (arg_of_output_mode x) (arg_of_output_mode y)))
 ;;
 
 let print_transformations () =
@@ -549,6 +697,8 @@ let standalone_args =
     " Run as a -ppx rewriter (must be the first argument)"
   ; "-o", Arg.String (fun s -> output := Some s),
     "<filename> Output file (use '-' for stdout)"
+  ; "-", Arg.Unit (fun () -> set_input "-"),
+    " Read input from stdin"
   ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
     "<string> Mark the given namespace as reserved"
   ; "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
@@ -559,6 +709,8 @@ let standalone_args =
     " Dump the marshaled ast to the output file instead of pretty-printing it"
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
     " Print the parsetree (same as ocamlc -dparsetree)"
+  ; "-null", Arg.Unit (fun () -> set_output_mode Null),
+    " Produce no output, except for errors"
   ; "-impl", Arg.Unit (fun () -> set_kind Impl),
     "<file> Treat the input as a .ml file"
   ; "-intf", Arg.Unit (fun () -> set_kind Intf),
@@ -575,8 +727,24 @@ let standalone_args =
     "<names> Apply these transformations in order (comma-separated list)"
   ; "-no-merge", Arg.Set no_merge,
     " Do not merge context free transformations (better for debugging rewriters)"
+  ; "-ite-check", Arg.Set Resrap.Warn.care_about_ite_branch,
+    " Enforce that \"complex\" if branches are delimited (disabled if -pp is given)"
   ; "-pp", Arg.String (fun s -> preprocessor := Some s),
     "<command>  Pipe sources through preprocessor <command> (incompatible with -as-ppx)"
+  ; "-reconcile", Arg.Unit (fun () -> set_output_mode (Reconcile Using_line_directives)),
+    " (WIP) Pretty print the output using a mix of the input source \
+     and the generated code"
+  ; "-reconcile-with-comments",
+    Arg.Unit (fun () -> set_output_mode (Reconcile Delimiting_generated_blocks)),
+    " (WIP) same as -reconcile but uses comments to enclose the generated code"
+  ; "-no-color", Arg.Clear use_color,
+    " Don't use colors when printing errors"
+  ; "-diff-cmd", Arg.String (fun s -> diff_command := Some s),
+    " Diff command when using code expectations"
+  ; "-pretty", Arg.Set pretty,
+    " Instruct code generators to improve the prettiness of the generated code"
+  ; "-styler", Arg.String (fun s -> styler := Some s),
+    " Code styler"
   ]
 ;;
 
@@ -590,13 +758,7 @@ let standalone_main () =
     Printf.sprintf "%s [extra_args] [<files>]" exe_name
   in
   let args = List.rev_append !args standalone_args in
-  let input = ref None in
-  let anon fn =
-    match !input with
-    | None -> input := Some fn
-    | Some _ -> raise (Arg.Bad "too many input files")
-  in
-  Arg.parse (Arg.align args) anon usage;
+  Arg.parse (Arg.align args) set_input usage;
   if !request_print_transformations then begin
     print_transformations ();
     exit 0;
@@ -607,7 +769,9 @@ let standalone_main () =
   end;
   if !use_optcomp then Lexer.set_preprocessor Optcomp.init Optcomp.map_lexer;
   match !input with
-  | None    -> Printf.eprintf "%s: no input file given\n%!" exe_name
+  | None    ->
+    Printf.eprintf "%s: no input file given\n%!" exe_name;
+    exit 2
   | Some fn ->
     let Kind.T kind =
       match !kind with
@@ -640,8 +804,13 @@ let standalone_run_as_ppx_rewriter () =
   for i = 1 to (n - 4) do
     argv.(i) <- Sys.argv.(i + 1)
   done;
+  let standalone_args =
+    List.map standalone_args ~f:(fun (arg, spec, _doc) ->
+      (arg, spec, " Unused with -as-ppx"))
+  in
+  let args = List.rev_append !args standalone_args in
   match
-    Arg.parse_argv argv (Arg.align (List.rev !args))
+    Arg.parse_argv argv (Arg.align args)
       (fun _ -> raise @@ Arg.Bad "anonymous arguments not accepted")
       usage
   with
@@ -661,3 +830,5 @@ let standalone () =
     Location.report_exception Format.err_formatter exn;
     exit 1
 ;;
+
+let pretty () = !pretty
