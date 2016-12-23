@@ -14,10 +14,10 @@ let rec compare : 'a . ('a -> 'a -> int) -> 'a t -> 'a t -> int =
     then 0
     else
       (match (a__001_, b__002_) with
-       | (A _a__010_,A _b__009_) -> _cmp__a _a__010_ _b__009_
+       | (A _a__003_,A _b__004_) -> _cmp__a _a__003_ _b__004_
        | (A _,_) -> (-1)
        | (_,A _) -> 1
-       | (B _a__008_,B _b__007_) ->
+       | (B _a__005_,B _b__006_) ->
          let rec loop a b =
            match (a, b) with
            | ([],[]) -> 0
@@ -28,16 +28,17 @@ let rec compare : 'a . ('a -> 'a -> int) -> 'a t -> 'a t -> int =
                (Pervasives.compare : string -> string -> int) x y  in
              if Pervasives.(=) n 0 then loop xs ys else n
          in
-         loop _a__008_ _b__007_
+         loop _a__005_ _b__006_
        | (B _,_) -> (-1)
        | (_,B _) -> 1
-       | (C _a__004_,C _b__003_) ->
+       | (C _a__007_,C _b__008_) ->
          compare
-           (fun a__005_  -> fun b__006_  -> _cmp__a a__005_ b__006_)
-           _a__004_ _b__003_
+           (fun a__009_  -> fun b__010_  -> _cmp__a a__009_ b__010_)
+           _a__007_ _b__008_
        | (C _,_) -> (-1)
        | (_,C _) -> 1
        | (Plop ,Plop ) -> 0)
+
 
 let rec t_of_sexp : 'a . (Sexplib.Sexp.t -> 'a) -> Sexplib.Sexp.t -> 'a t =
   fun (type a) ->
