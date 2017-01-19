@@ -1,8 +1,8 @@
-open Ppx_core.Std
+open Import
 open Parsetree
 
 (** Add one argument to the command line *)
-val add_arg : Arg.key -> Arg.spec -> doc:string -> unit
+val add_arg : Caml.Arg.key -> Caml.Arg.spec -> doc:string -> unit
 
 (** [register_transformation name] registers a code transformation.
 

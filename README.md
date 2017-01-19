@@ -13,14 +13,62 @@ The aim is to provide a tool that can be used to:
 - improved errors for misspelled/misplaced attributes and extension
   points
 
-## Building a custom driver
+## Using Ppx\_driver based rewriters
 
-To build a custom driver, simply link all the AST transformers
-together with the `ppx_driver_runner.cmxa` archive at the end:
+The recommended way to use rewriters based on Ppx\_driver is through
+[jbuilder](https://github.com/janestreet/jbuilder). All you need to is
+add this line to your `(library ...)` or `(executables ...)` stanza:
+
+```scheme
+(preprocess (pps rewriter1 rewriter2 ...))
+```
+
+jbuilder will automatically build a static driver including all these
+rewriters.
+
+If you are not using jbuilder, you can:
+- use the the ocamlbuild plugin provided with Ppx\_driver
+- build a custom driver yourself using ocamlfind
+
+These methods are described in the following sections.
+
+## Creating a new Ppx\_driver based rewriter
+
+If using jbuilder, you can just use the following jbuild file:
+
+```scheme
+(library
+ ((name        my_ppx)
+  (public_name my_ppx)
+  (kind ppx_rewriter)
+  (libraries (ppx_core ppx_driver))
+  (ppx_runtime_libraries (<runtime dependencies if any>))
+  (preprocess metaquot)))
+```
+
+`(kind ppx_driver)` has two effects:
+1. it links the library with `-linkall`. Since plugins register
+   themselves with the Ppx\_driver library by doing a toplevel side
+   effect, you need to be sure they are linked in the static driver to
+   be taken into accound
+2. it instructs jbuilder to produce a special META file that is
+   compatible with the various ways of using ppx rewriters, i.e. for
+   people not using jbuilder or the ocamlbuild plugin
+
+## Building a custom driver using ocamlfind
+
+To build a custom driver using ocamlfind, simply link all the AST
+transformers together with the `ppx_driver.runner` package at the end:
 
     ocamlfind ocamlopt -predicates ppx_driver -o ppx -linkpkg \
       -package ppx_sexp_conv -package ppx_bin_prot \
-      ppx_driver_runner.cmxa
+      -package ppx_driver_runner
+
+Normally, ppx\_driver based rewriters should be build with the
+approriate `-linkall` option on individual libraries. If one is
+missing this option, the code rewriter might not get linked in. If
+this is the case, a workaround is to pass `-linkall` when linking the
+custom driver.
 
 ## The driver as a command line tool
 
@@ -121,48 +169,87 @@ details.
 
 ## ppx_driver rewriters as findlib libraries
 
-In normal operation, ppx\_driver rewriters are packaged as findlib
-libraries. In order to make everything work smoothly, you need a
-peculiar META file. The rules are very similar as for
-[ppx_deriving plugins](https://github.com/whitequark/ppx_deriving).
+Note: if using jbuilder, you do not need to read this as jbuilder
+already does all the right things for you.
 
-The main rule is that when you are building a driver, the `ppx_driver`
-predicate is added. You must thinkg about this to decide where every
-dependency must go.
+In normal operation, Ppx\_driver rewriters are packaged as findlib
+libraries. When using jbuilder everything is simple as preprocessors
+and normal dependencies are separated. However historically, people
+have been specifying both preprocessors and normal library
+dependencies together. Even worse, many build system still don't use a
+static driver and call out to multiple ppx commands to preprocess a
+single file, which slow downs compilation a lot.
 
-Essentially this the what a META file for a rewriter should look like:
+In order for all these different methods to work properly, you need a
+peculiar META file. The rules are explained below.
+
+It is recommended to split the findlib package into two:
+1. one for the main library, which almost assume it is just a normal
+   library
+2. another sub-package one for:
+   - allowing to mix preprocessors and normal dependencies
+   - the method of calling one executable per rewriter
+
+In the rest we'll assume we are writing a META file for a `ppx_foo`
+rewriter, that itself uses the `ppx_driver`, `ppx_core` and `re`
+libraries, and produce code using `ppx_foo.runtime-lib`.
+
+We want the META file to support all of these:
+1. mix normal dependencies and preprocessors, using one executable per
+   rewriter:
+
+   ```
+   ocamlfind ocamlc -package ppx_foo -c toto.ml
+   ```
+2. mix normal dependencies and preprocessors, using a single ppx
+   driver:
+
+   ```
+   $ ocamlfind ocamlc -package ppx_foo -predicates custom_ppx \
+      -ppx ./custom-driver.exe -c toto.ml
+   ```
+3. build a custom driver:
+
+   ```
+   $ ocamlfind ocamlc -linkpkg -package ppx_foo -predicates ppx_driver \
+      -o custom-driver.exe
+   ```
+4. build systems properly specifying preprocessors as such, separated
+   from normal dependencies, as jbuilder does
+
+Since preprocessors and normal dependencies are always specified
+separately in jbuild files, jbuilder just always set the `ppx_driver`
+predicates.
+
+In the end the META file should look like this:
 
 ```shell
-version = "42.0"
-description = "Blah blah"
-# The following line must list the ppx dependencies of the rewriter
-# itself, such as ppx_core, ppx_type_conv, ...
-requires = "ppx_driver <other requiremement for rewriter itself>"
-# The following line is optional, here you can list normal libraries
-# that you are using inside the ppx rewriter. For instance if you are
-# using the "str" library in the rewriter itself, put it here
-requires(ppx_driver) = "str ..."
-# The following line is for runtime dependencies, this allow users to
-# just put ppx_foo as dependency and get both the rewriter and the
-# runtime dependencies
-requires(-ppx_driver)        += "<runtime dependencies>"
-# The following line is optional, it is currently only used by
-# toplevel_expect_test, which is a toplevel where the rewriting
-# happens in the same process as the toplevel itself. This is useful
-# for defining transformations and testing them immediately after
-requires(ppx_driver,toploop) += "<runtime dependencies>"
-# The next 5 lines are classic. The only difference with a normal
-# library is that the archive is linked only if the "ppx_driver"
-# predicate is present. This is to avoid linked them in the final
-# executable itself
-archive(ppx_driver, byte  ) = "ppx_expect.cma"
-archive(ppx_driver, native) = "ppx_expect.cmxa"
-plugin(ppx_driver, byte  ) = "ppx_expect.cma"
-plugin(ppx_driver, native) = "ppx_expect.cmxs"
-exists_if = "ppx_expect.cma"
-# The following line instruct ocamlfind to pass "-ppx ./ppx" to the
-# OCaml compiler when none of the "ppx_driver" or "custom_ppx"
-# predicates are present. This explains why we need to
-# "predicate(custom_ppx)" when using ppx_driver
-ppx(-ppx_driver,-custom_ppx) = "./ppx"
+# Standard package, expect it assumes that the "ppx_driver" predicate
+# is set
+version                     = "42.0"
+description                 = "interprets [%foo ...] extensions"
+requires(ppx_driver)        = "ppx_core ppx_driver re"
+archives(ppx_driver,byte)   = "ppx_foo.cma"
+archives(ppx_driver,native) = "ppx_foo.cmxa"
+plugin(ppx_driver,byte)     = "ppx_foo.cma"
+plugin(ppx_driver,native)   = "ppx_foo.cmxs"
+
+# This is what jbuilder uses to find out the runtime dependencies of
+# a preprocessor
+ppx_runtime_deps = "ppx_foo.runtime-lib"
+
+# This line makes things transparent for people mixing preprocessors
+# and normal dependencies
+requires(-ppx_driver) = "ppx_foo.deprecated-ppx-method"
+
+package "deprecated-ppx-method" (
+  description = "glue package for the deprecated method of using ppx"
+  requires    = "ppx_foo.runtime-lib"
+  ppx(-ppx_driver,-custom_ppx) = "./as-ppx.exe"
+)
+
+package "runtime-lib" ( ... )
 ```
+
+You can check that this META works for all the 4 methods described
+above.

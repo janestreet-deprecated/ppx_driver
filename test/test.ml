@@ -1,3 +1,4 @@
+open Ppx_compare_lib.Builtin
 open Sexplib.Std
 
 type 'a t =
@@ -10,7 +11,7 @@ let rec compare : 'a . ('a -> 'a -> int) -> 'a t -> 'a t -> int =
   fun _cmp__a  ->
   fun a__001_  ->
   fun b__002_  ->
-    if Pervasives.(==) a__001_ b__002_
+    if Ppx_compare_lib.phys_equal a__001_ b__002_
     then 0
     else
       (match (a__001_, b__002_) with
@@ -18,27 +19,13 @@ let rec compare : 'a . ('a -> 'a -> int) -> 'a t -> 'a t -> int =
        | (A _,_) -> (-1)
        | (_,A _) -> 1
        | (B _a__005_,B _b__006_) ->
-         let rec loop a b =
-           match (a, b) with
-           | ([],[]) -> 0
-           | ([],_) -> (-1)
-           | (_,[]) -> 1
-           | (x::xs,y::ys) ->
-             let n =
-               (Pervasives.compare : string -> string -> int) x y  in
-             if Pervasives.(=) n 0 then loop xs ys else n
-         in
-         loop _a__005_ _b__006_
+         compare_list compare_string _a__005_ _b__006_
        | (B _,_) -> (-1)
        | (_,B _) -> 1
-       | (C _a__007_,C _b__008_) ->
-         compare
-           (fun a__009_  -> fun b__010_  -> _cmp__a a__009_ b__010_)
-           _a__007_ _b__008_
+       | (C _a__009_,C _b__010_) -> compare _cmp__a _a__009_ _b__010_
        | (C _,_) -> (-1)
        | (_,C _) -> 1
        | (Plop ,Plop ) -> 0)
-
 
 let rec t_of_sexp : 'a . (Sexplib.Sexp.t -> 'a) -> Sexplib.Sexp.t -> 'a t =
   fun (type a) ->
@@ -95,5 +82,4 @@ let rec sexp_of_t : 'a . ('a -> Sexplib.Sexp.t) -> 'a t -> Sexplib.Sexp.t =
          Sexplib.Sexp.List [Sexplib.Sexp.Atom "C"; v0]
        | Plop  -> Sexplib.Sexp.Atom "Plop" : (a -> Sexplib.Sexp.t) ->
        a t -> Sexplib.Sexp.t)
-
 [@@@end]

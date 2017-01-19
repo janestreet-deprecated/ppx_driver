@@ -1,4 +1,4 @@
-open Ppx_core.Std
+open Import
 
 module Context : sig
   type 'a t =

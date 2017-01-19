@@ -1,22 +1,8 @@
-open StdLabels
-open Ppx_core.Std
 open Import
 
-module Caller_id = Ppx_core.Caller_id
+module Arg = Caml.Arg
 
-module List = struct
-  include List
-
-  let rec filter_map l ~f =
-    match l with
-    | [] -> []
-    | x :: l ->
-      match f x with
-      | None -> filter_map l ~f
-      | Some x -> x :: filter_map l ~f
-end
-
-let exe_name = Filename.basename Sys.executable_name
+let exe_name = Caml.Filename.basename Caml.Sys.executable_name
 
 let args = ref []
 
@@ -49,8 +35,8 @@ module Transform = struct
 
   let print_caller_id oc (caller_id : Caller_id.t) =
     match caller_id with
-    | None -> output_string oc "<unknown location>"
-    | Some loc -> Printf.fprintf oc "%s:%d" loc.filename loc.line_number
+    | None -> Out_channel.output_string oc "<unknown location>"
+    | Some loc -> Out_channel.fprintf oc "%s:%d" loc.filename loc.line_number
   ;;
 
   let register ?(extensions=[]) ?(rules=[]) ?enclose_impl ?enclose_intf
@@ -58,13 +44,13 @@ module Transform = struct
     let rules =
       List.map extensions ~f:Context_free.Rule.extension @ rules
     in
-    let caller_id = Caller_id.get ~skip:[__FILE__] in
-    begin match List.filter !all ~f:(fun ct -> ct.name = name) with
+    let caller_id = Caller_id.get ~skip:[Caml.__FILE__] in
+    begin match List.filter !all ~f:(fun ct -> String.equal ct.name name) with
     | [] -> ()
     | ct :: _ ->
-      Printf.eprintf "Warning: code transformation %s registered twice.\n" name;
-      Printf.eprintf "  - first time was at %a\n" print_caller_id ct.registered_at;
-      Printf.eprintf "  - second time is at %a\n" print_caller_id caller_id;
+      eprintf "Warning: code transformation %s registered twice.\n" name;
+      eprintf "  - first time was at %a\n" print_caller_id ct.registered_at;
+      eprintf "  - second time is at %a\n" print_caller_id caller_id;
     end;
     let ct =
       { name
@@ -188,14 +174,14 @@ let debug_dropped_attribute name ~old_dropped ~new_dropped =
   let print_diff what a b =
     let diff =
       List.filter a ~f:(fun (name : _ Location.loc) ->
-        not (List.exists b ~f:(fun (name' : _ Location.loc) -> name.txt == name'.txt)))
+        not (List.exists b ~f:(fun (name' : _ Location.loc) -> phys_equal name.txt name'.txt)))
     in
-    if diff <> [] then begin
-      Format.eprintf "The following attributes %s after applying %s:\n"
+    if not (List.is_empty diff) then begin
+      eprintf "The following attributes %s after applying %s:\n"
         what name;
       List.iter diff ~f:(fun { Location. txt; loc } ->
-        Format.eprintf "- %a: %s\n" Location.print_loc loc txt);
-      Format.eprintf "@."
+        Caml.Format.eprintf "- %a: %s\n" Location.print_loc loc txt);
+      Caml.Format.eprintf "@."
     end
   in
   print_diff "disappeared" new_dropped old_dropped;
@@ -208,8 +194,8 @@ let get_whole_ast_passes ~hook ~expect_mismatch_handler =
     | None -> List.rev !Transform.all
     | Some names ->
       List.map names ~f:(fun name ->
-        List.find !Transform.all ~f:(fun (ct : Transform.t) ->
-          ct.name = name))
+        List.find_exn !Transform.all ~f:(fun (ct : Transform.t) ->
+          String.equal ct.name name))
   in
   let cts =
     if !no_merge then
@@ -241,7 +227,7 @@ let get_whole_ast_passes ~hook ~expect_mismatch_handler =
           | enclosers -> Some (fun loc ->
             let headers, footers =
               List.map enclosers ~f:(fun f -> f loc)
-              |> List.split
+              |> List.unzip
             in
             let headers = List.concat headers in
             let footers = List.concat (List.rev footers) in
@@ -265,11 +251,11 @@ let print_passes () =
       ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
   in
   if !perform_checks then
-    Printf.printf "<builtin:freshen-and-collect-attributes>\n";
-  List.iter cts ~f:(fun ct -> Printf.printf "%s\n" ct.Transform.name);
+    printf "<builtin:freshen-and-collect-attributes>\n";
+  List.iter cts ~f:(fun ct -> printf "%s\n" ct.Transform.name);
   if !perform_checks then
-    Printf.printf "<builtin:check-unused-attributes>\n\
-                   <builtin:check-unused-extensions>\n";
+    printf "<builtin:check-unused-attributes>\n\
+            <builtin:check-unused-extensions>\n";
 ;;
 
 let apply_transforms ~field ~dropped_so_far ~hook ~expect_mismatch_handler x =
@@ -346,17 +332,17 @@ let mapper =
 ;;
 
 let as_ppx_rewriter_main argv =
-  let argv = Sys.executable_name :: argv in
+  let argv = Caml.Sys.executable_name :: argv in
   let usage =
     Printf.sprintf "%s [extra_args] <infile> <outfile>" exe_name
   in
   match
     Arg.parse_argv (Array.of_list argv) (Arg.align (List.rev !args))
-      (fun _ -> raise @@ Arg.Bad "anonymous arguments not accepted")
+      (fun _ -> raise (Arg.Bad "anonymous arguments not accepted"))
       usage
   with
-  | exception Arg.Bad  msg -> prerr_string msg; exit 2
-  | exception Arg.Help msg -> prerr_string msg; exit 0
+  | exception Arg.Bad  msg -> eprintf "%s" msg; Caml.exit 2
+  | exception Arg.Help msg -> eprintf "%s" msg; Caml.exit 0
   | () -> mapper
 
 let run_as_ppx_rewriter () =
@@ -372,9 +358,9 @@ module Kind = struct
   type packed = T : _ list t -> packed
 
   let of_filename fn =
-    if Filename.check_suffix fn ".ml" then
+    if Caml.Filename.check_suffix fn ".ml" then
       Some (T Impl)
-    else if Filename.check_suffix fn ".mli" then
+    else if Caml.Filename.check_suffix fn ".mli" then
       Some (T Intf)
     else
       None
@@ -393,7 +379,7 @@ end
 
 let string_contains_binary_ast kind s =
   let ast_magic = Kind.ast_magic kind in
-  String.sub s ~pos:0 ~len:9 = String.sub ast_magic ~pos:0 ~len:9
+  String.equal (String.sub s ~pos:0 ~len:9) (String.sub ast_magic ~pos:0 ~len:9)
 
 type ast_file_test_result =
   | Is_ast_file
@@ -402,11 +388,11 @@ type ast_file_test_result =
 let is_ast_file kind fn ic =
   let ast_magic = Kind.ast_magic kind in
   let ast_magic_len = String.length ast_magic in
-  let buffer = Bytes.create ast_magic_len in
-  let len = input ic buffer 0 ast_magic_len in
+  let buffer = String.create ast_magic_len in
+  let len = In_channel.input ic ~buf:buffer ~pos:0 ~len:ast_magic_len in
   if len < ast_magic_len then
     Isn't_ast_file { prefix_read_from_file = String.sub buffer ~pos:0 ~len }
-  else if buffer = ast_magic then
+  else if String.equal buffer ast_magic then
     Is_ast_file
   else if string_contains_binary_ast kind buffer then
     Location.raise_errorf ~loc:(Location.in_file fn)
@@ -416,16 +402,16 @@ let is_ast_file kind fn ic =
 ;;
 
 let output_ast oc kind ast =
-  output_string oc (Kind.ast_magic kind);
-  output_value oc !Location.input_name;
-  output_value oc ast;
+  Out_channel.output_string oc (Kind.ast_magic kind);
+  Out_channel.output_value oc !Location.input_name;
+  Out_channel.output_value oc ast;
 ;;
 
 exception Pp_error of string
 
 let report_pp_error ppf cmd =
-  Format.fprintf ppf "Error while running external preprocessor@.\
-                      Command line: %s@." cmd
+  Caml.Format.fprintf ppf "Error while running external preprocessor@.\
+                           Command line: %s@." cmd
 
 let () =
   Location.register_error_of_exn
@@ -434,7 +420,7 @@ let () =
       | _ -> None)
 
 let remove_no_error fn =
-  try Sys.remove fn with Sys_error _ -> ()
+  try Caml.Sys.remove fn with Sys_error _ -> ()
 
 let protectx x ~f ~finally =
   match f x with
@@ -446,42 +432,51 @@ let with_preprocessed_file fn ~f =
   match !preprocessor with
   | None -> f fn
   | Some pp ->
-    protectx (Filename.temp_file "ocamlpp" "")
+    protectx (Caml.Filename.temp_file "ocamlpp" "")
       ~finally:remove_no_error
       ~f:(fun tmpfile ->
         let comm =
           Printf.sprintf "%s %s > %s"
-            pp (if fn = "-" then "" else Filename.quote fn) (Filename.quote tmpfile)
+            pp (if String.equal fn "-" then "" else Caml.Filename.quote fn)
+            (Caml.Filename.quote tmpfile)
         in
-        if Sys.command comm <> 0 then raise (Pp_error comm);
+        if Caml.Sys.command comm <> 0 then raise (Pp_error comm);
         f tmpfile)
 
 let with_preprocessed_input fn ~f =
   with_preprocessed_file fn ~f:(fun fn ->
-    if fn = "-" then
+    if String.equal fn "-" then
       f stdin
     else
-      protectx (open_in_bin fn) ~f ~finally:close_in)
+      In_channel.with_file fn ~f)
 ;;
 
 let relocate = object
   inherit [string * string] Ast_traverse.map_with_context
 
   method! lexing_position (old_fn, new_fn) pos =
-    if pos.pos_fname = old_fn then
+    if String.equal pos.pos_fname old_fn then
       { pos with pos_fname = new_fn }
     else
       pos
 end
 
-let load_input : type a. a Kind.t -> string -> string -> in_channel -> a =
+let load_input : type a. a Kind.t -> string -> string -> In_channel.t -> a =
   fun kind fn input_name ic ->
     Location.input_name := input_name;
     match is_ast_file kind fn ic with
     | Is_ast_file ->
-      let ast_input_name : string = input_value ic in
-      let ast : a = input_value ic in
-      if ast_input_name = input_name then
+      let ast_input_name : string =
+        match In_channel.unsafe_input_value ic with
+        | Some v -> v
+        | None -> raise End_of_file
+      in
+      let ast : a =
+        match In_channel.unsafe_input_value ic with
+        | Some v -> v
+        | None -> raise End_of_file
+      in
+      if String.equal ast_input_name input_name then
         ast
       else
         let relocate : _ -> a -> a =
@@ -512,10 +507,7 @@ let load_input : type a. a Kind.t -> string -> string -> in_channel -> a =
 ;;
 
 let load_source_file kind fn =
-  let s =
-    protectx (open_in_bin fn) ~finally:close_in ~f:(fun ic ->
-      really_input_string ic (in_channel_length ic))
-  in
+  let s = In_channel.read_all fn in
   if string_contains_binary_ast kind s then
     Location.raise_errorf ~loc:(Location.in_file fn)
       "ppx_driver: cannot use -reconcile with binary AST files";
@@ -567,7 +559,7 @@ let process_file
         match kind with
         | Kind.Intf -> map_signature_gen ast ~hook ~expect_mismatch_handler
         | Kind.Impl -> map_structure_gen ast ~hook ~expect_mismatch_handler
-      with exn when output_mode = Dump_ast ->
+      with exn when (match output_mode with Dump_ast -> true | _ -> false) ->
       match Location.error_of_exn exn with
       | None -> raise exn
       | Some error ->
@@ -591,7 +583,7 @@ let process_file
     let mismatches_found =
       match !expect_mismatches with
       | [] ->
-        if Sys.file_exists corrected then Sys.remove corrected;
+        if Caml.Sys.file_exists corrected then Caml.Sys.remove corrected;
         false
       | mismatches ->
         Reconcile.reconcile mismatches ~contents:(Lazy.force input_contents)
@@ -604,20 +596,20 @@ let process_file
      | Null -> ()
      | Pretty_print ->
        with_output output ~binary:false ~f:(fun oc ->
-         let ppf = Format.formatter_of_out_channel oc in
+         let ppf = Caml.Format.formatter_of_out_channel oc in
          (match kind with
           | Kind.Intf -> Pprintast.signature ppf ast
           | Kind.Impl -> Pprintast.structure ppf ast);
-         if not null_ast then Format.pp_print_newline ppf ())
+         if not null_ast then Caml.Format.pp_print_newline ppf ())
      | Dump_ast ->
        with_output output ~binary:true ~f:(fun oc -> output_ast oc kind ast)
      | Dparsetree ->
        with_output output ~binary:false ~f:(fun oc ->
-         let ppf = Format.formatter_of_out_channel oc in
+         let ppf = Caml.Format.formatter_of_out_channel oc in
          (match kind with
           | Kind.Intf -> Printast.interface      ppf ast
           | Kind.Impl -> Printast.implementation ppf ast);
-         Format.pp_print_newline ppf ())
+         Caml.Format.pp_print_newline ppf ())
      | Reconcile mode ->
        Reconcile.reconcile !replacements ~contents:(Lazy.force input_contents) ~output
          ~input_filename:fn ~input_name ~target:(Output mode) ?styler:!styler
@@ -626,7 +618,7 @@ let process_file
     if mismatches_found then begin
       Print_diff.print () ~file1:fn ~file2:corrected ~use_color:!use_color
         ?diff_command:!diff_command;
-      exit 1
+      Caml.exit 1
     end
 ;;
 
@@ -643,7 +635,8 @@ let set_input fn =
 let set_kind k =
   let k = Kind.T k in
   match !kind with
-  | Some k' when k <> k' -> raise (Arg.Bad "must specify at most one of -impl or -intf")
+  | Some k' when Polymorphic_compare.(<>) k k' ->
+    raise (Arg.Bad "must specify at most one of -impl or -intf")
   | _ -> kind := Some k
 ;;
 
@@ -653,7 +646,7 @@ let set_output_mode mode =
   | _, Pretty_print -> assert false
   | Dump_ast   , Dump_ast
   | Dparsetree , Dparsetree -> ()
-  | Reconcile a, Reconcile b when a = b -> ()
+  | Reconcile a, Reconcile b when Polymorphic_compare.equal a b -> ()
   | x, y ->
     let arg_of_output_mode = function
       | Pretty_print -> assert false
@@ -670,23 +663,23 @@ let set_output_mode mode =
 
 let print_transformations () =
   List.iter !Transform.all ~f:(fun (ct : Transform.t) ->
-    Printf.printf "%s\n" ct.name);
+    printf "%s\n" ct.name);
 ;;
 
 let set_apply_list s =
   let rec split i j =
     if j = String.length s then
       [String.sub s ~pos:i ~len:(j - i)]
-    else if s.[j] = ',' then
+    else if Char.equal s.[j] ',' then
       String.sub s ~pos:i ~len:(j - i) :: split (j + 1) (j + 1)
     else
       split i (j + 1)
   in
-  let names = if s = "" then [] else split 0 0 in
+  let names = if String.equal s "" then [] else split 0 0 in
   List.iter names ~f:(fun name ->
     if not (List.exists !Transform.all ~f:(fun (ct : Transform.t) ->
-      ct.name = name)) then
-      raise (Arg.Bad (Printf.sprintf "code transformation '%s' does not exist" name)));
+      String.equal ct.name name)) then
+      raise (Caml.Arg.Bad (Printf.sprintf "code transformation '%s' does not exist" name)));
   apply_list := Some names
 ;;
 
@@ -761,17 +754,17 @@ let standalone_main () =
   Arg.parse (Arg.align args) set_input usage;
   if !request_print_transformations then begin
     print_transformations ();
-    exit 0;
+    Caml.exit 0;
   end;
   if !request_print_passes then begin
     print_passes ();
-    exit 0;
+    Caml.exit 0;
   end;
   if !use_optcomp then Lexer.set_preprocessor Optcomp.init Optcomp.map_lexer;
   match !input with
   | None    ->
-    Printf.eprintf "%s: no input file given\n%!" exe_name;
-    exit 2
+    eprintf "%s: no input file given\n%!" exe_name;
+    Caml.exit 2
   | Some fn ->
     let Kind.T kind =
       match !kind with
@@ -780,9 +773,9 @@ let standalone_main () =
         match Kind.of_filename fn with
         | Some k -> k
         | None ->
-          Printf.eprintf "%s: don't know what to do with '%s', use -impl or -intf.\n"
+          eprintf "%s: don't know what to do with '%s', use -impl or -intf.\n"
             exe_name fn;
-          exit 2
+          Caml.exit 2
     in
     let input_name =
       match !loc_fname with
@@ -793,16 +786,16 @@ let standalone_main () =
 ;;
 
 let standalone_run_as_ppx_rewriter () =
-  let n = Array.length Sys.argv in
+  let n = Array.length Caml.Sys.argv in
   let usage = Printf.sprintf "%s -as-ppx [extra_args] <infile> <outfile>" exe_name in
   if n < 4 then begin
-    Printf.eprintf "Usage: %s\n%!" usage;
-    exit 2
+    eprintf "Usage: %s\n%!" usage;
+    Caml.exit 2
   end;
-  let argv = Array.make (n - 3) "" in
-  argv.(0) <- Sys.argv.(0);
+  let argv = Array.create ~len:(n - 3) "" in
+  argv.(0) <- Caml.Sys.argv.(0);
   for i = 1 to (n - 4) do
-    argv.(i) <- Sys.argv.(i + 1)
+    argv.(i) <- Caml.Sys.argv.(i + 1)
   done;
   let standalone_args =
     List.map standalone_args ~f:(fun (arg, spec, _doc) ->
@@ -811,24 +804,24 @@ let standalone_run_as_ppx_rewriter () =
   let args = List.rev_append !args standalone_args in
   match
     Arg.parse_argv argv (Arg.align args)
-      (fun _ -> raise @@ Arg.Bad "anonymous arguments not accepted")
+      (fun _ -> raise (Arg.Bad "anonymous arguments not accepted"))
       usage
   with
-  | exception Arg.Bad  msg -> prerr_string msg; exit 2
-  | exception Arg.Help msg -> prerr_string msg; exit 0
+  | exception Arg.Bad  msg -> eprintf "%s" msg; Caml.exit 2
+  | exception Arg.Help msg -> eprintf "%s" msg; Caml.exit 0
   | () ->
-    Ast_mapper.apply ~source:Sys.argv.(n - 2) ~target:Sys.argv.(n - 1) mapper
+    Ast_mapper.apply ~source:Caml.Sys.argv.(n - 2) ~target:Caml.Sys.argv.(n - 1) mapper
 ;;
 
 let standalone () =
   try
-    if Array.length Sys.argv >= 2 && Sys.argv.(1) = "-as-ppx" then begin
+    if Array.length Caml.Sys.argv >= 2 && String.equal Caml.Sys.argv.(1) "-as-ppx" then
       standalone_run_as_ppx_rewriter ()
-    end else
+    else
       standalone_main ()
   with exn ->
-    Location.report_exception Format.err_formatter exn;
-    exit 1
+    Location.report_exception Caml.Format.err_formatter exn;
+    Caml.exit 1
 ;;
 
 let pretty () = !pretty
