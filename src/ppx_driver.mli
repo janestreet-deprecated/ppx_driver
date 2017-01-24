@@ -1,5 +1,4 @@
 open Import
-open Parsetree
 
 (** Add one argument to the command line *)
 val add_arg : Caml.Arg.key -> Caml.Arg.spec -> doc:string -> unit

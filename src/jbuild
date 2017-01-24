@@ -1,7 +1,7 @@
 (library
  ((name ppx_driver)
   (public_name ppx_driver)
-  (libraries (compiler-libs.common ppx_core ppx_optcomp resrap print_diff))
+  (libraries (compiler-libs.common ppx_core ppx_optcomp print_diff))
   (preprocess no_preprocessing)
   (js_of_ocaml ())
   ))

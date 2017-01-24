@@ -27,12 +27,10 @@ type target =
   | Output of mode
   | Corrected
 
-type file_type = Impl | Intf
-
 val reconcile
   :  ?styler:string
   -> Replacement.t list
-  -> file_type:file_type
+  -> kind:Kind.t
   -> contents:string
   -> input_filename:string
   -> output:string option

@@ -173,14 +173,14 @@ let register_code_transformation ~name ~impl ~intf =
 let debug_dropped_attribute name ~old_dropped ~new_dropped =
   let print_diff what a b =
     let diff =
-      List.filter a ~f:(fun (name : _ Location.loc) ->
+      List.filter a ~f:(fun (name : _ Loc.t) ->
         not (List.exists b ~f:(fun (name' : _ Location.loc) -> phys_equal name.txt name'.txt)))
     in
     if not (List.is_empty diff) then begin
       eprintf "The following attributes %s after applying %s:\n"
         what name;
       List.iter diff ~f:(fun { Location. txt; loc } ->
-        Caml.Format.eprintf "- %a: %s\n" Location.print_loc loc txt);
+        Caml.Format.eprintf "- %a: %s\n" Location.print loc txt);
       Caml.Format.eprintf "@."
     end
   in
@@ -326,9 +326,27 @@ let map_signature sg =
     ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
 
 let mapper =
-  let structure _ st = map_structure st in
-  let signature _ sg = map_signature sg in
-  { Ast_mapper.default_mapper with structure; signature }
+  let module Ocaml = Migrate_parsetree.Ast_current in
+  let module Js = Ppx_ast.Selected_ast in
+  let structure _ st =
+    Ocaml.ast_of_impl st
+    |> Js.of_ocaml_ast
+    |> Js.impl_of_ast
+    |> map_structure
+    |> Js.ast_of_impl
+    |> Js.to_ocaml_ast
+    |> Ocaml.impl_of_ast
+  in
+  let signature _ sg =
+    Ocaml.ast_of_intf sg
+    |> Js.of_ocaml_ast
+    |> Js.intf_of_ast
+    |> map_signature
+    |> Js.ast_of_intf
+    |> Js.to_ocaml_ast
+    |> Ocaml.intf_of_ast
+  in
+  { Ocaml_common.Ast_mapper.default_mapper with structure; signature }
 ;;
 
 let as_ppx_rewriter_main argv =
@@ -347,76 +365,28 @@ let as_ppx_rewriter_main argv =
 
 let run_as_ppx_rewriter () =
   perform_checks := false;
-  Ast_mapper.run_main as_ppx_rewriter_main
+  Ocaml_common.Ast_mapper.run_main as_ppx_rewriter_main
 
-module Kind = struct
-  type _ t =
-    | Intf : Parsetree.signature t
-    | Impl : Parsetree.structure t
-  ;;
+let string_contains_binary_ast s =
+  let test magic_number =
+    String.is_prefix s ~prefix:(String.sub magic_number ~pos:0 ~len:9)
+  in
+  test Ast_magic.ast_intf_magic_number ||
+  test Ast_magic.ast_impl_magic_number
 
-  type packed = T : _ list t -> packed
+type pp_error = { filename : string; command_line : string }
+exception Pp_error of pp_error
 
-  let of_filename fn =
-    if Caml.Filename.check_suffix fn ".ml" then
-      Some (T Impl)
-    else if Caml.Filename.check_suffix fn ".mli" then
-      Some (T Intf)
-    else
-      None
-  ;;
-
-  let ast_magic : type a. a t -> string = function
-    | Impl -> Config.ast_impl_magic_number
-    | Intf -> Config.ast_intf_magic_number
-  ;;
-
-  let to_file_type : type a. a t -> Reconcile.file_type = function
-    | Intf -> Intf
-    | Impl -> Impl
-  ;;
-end
-
-let string_contains_binary_ast kind s =
-  let ast_magic = Kind.ast_magic kind in
-  String.equal (String.sub s ~pos:0 ~len:9) (String.sub ast_magic ~pos:0 ~len:9)
-
-type ast_file_test_result =
-  | Is_ast_file
-  | Isn't_ast_file of { prefix_read_from_file : string }
-
-let is_ast_file kind fn ic =
-  let ast_magic = Kind.ast_magic kind in
-  let ast_magic_len = String.length ast_magic in
-  let buffer = String.create ast_magic_len in
-  let len = In_channel.input ic ~buf:buffer ~pos:0 ~len:ast_magic_len in
-  if len < ast_magic_len then
-    Isn't_ast_file { prefix_read_from_file = String.sub buffer ~pos:0 ~len }
-  else if String.equal buffer ast_magic then
-    Is_ast_file
-  else if string_contains_binary_ast kind buffer then
-    Location.raise_errorf ~loc:(Location.in_file fn)
-      "File is a binary ast for a different version of OCaml"
-  else
-    Isn't_ast_file { prefix_read_from_file = buffer }
-;;
-
-let output_ast oc kind ast =
-  Out_channel.output_string oc (Kind.ast_magic kind);
-  Out_channel.output_value oc !Location.input_name;
-  Out_channel.output_value oc ast;
-;;
-
-exception Pp_error of string
-
-let report_pp_error ppf cmd =
+let report_pp_error ppf e =
   Caml.Format.fprintf ppf "Error while running external preprocessor@.\
-                           Command line: %s@." cmd
+                           Command line: %s@." e.command_line
 
 let () =
-  Location.register_error_of_exn
+  Location.Error.register_error_of_exn
     (function
-      | Pp_error cmd -> Some (Location.error_of_printer_file report_pp_error cmd)
+      | Pp_error e ->
+        Some (Location.Error.createf ~loc:(Location.in_file e.filename) "%a"
+                report_pp_error e)
       | _ -> None)
 
 let remove_no_error fn =
@@ -440,7 +410,10 @@ let with_preprocessed_file fn ~f =
             pp (if String.equal fn "-" then "" else Caml.Filename.quote fn)
             (Caml.Filename.quote tmpfile)
         in
-        if Caml.Sys.command comm <> 0 then raise (Pp_error comm);
+        if Caml.Sys.command comm <> 0 then
+          raise (Pp_error { filename = fn
+                          ; command_line = comm
+                          });
         f tmpfile)
 
 let with_preprocessed_input fn ~f =
@@ -454,61 +427,59 @@ let with_preprocessed_input fn ~f =
 let relocate = object
   inherit [string * string] Ast_traverse.map_with_context
 
-  method! lexing_position (old_fn, new_fn) pos =
+  method! position (old_fn, new_fn) pos =
     if String.equal pos.pos_fname old_fn then
       { pos with pos_fname = new_fn }
     else
       pos
 end
 
-let load_input : type a. a Kind.t -> string -> string -> In_channel.t -> a =
-  fun kind fn input_name ic ->
-    Location.input_name := input_name;
-    match is_ast_file kind fn ic with
-    | Is_ast_file ->
-      let ast_input_name : string =
-        match In_channel.unsafe_input_value ic with
-        | Some v -> v
-        | None -> raise End_of_file
-      in
-      let ast : a =
-        match In_channel.unsafe_input_value ic with
-        | Some v -> v
-        | None -> raise End_of_file
-      in
-      if String.equal ast_input_name input_name then
-        ast
-      else
-        let relocate : _ -> a -> a =
-          match kind with
-          | Kind.Intf -> relocate#signature
-          | Kind.Impl -> relocate#structure
-        in
-        relocate (ast_input_name, input_name) ast
-    | Isn't_ast_file { prefix_read_from_file } ->
-      (* To test if a file is an AST file, we have to read the first few bytes of the
-         file. If it is not, we have to parse these bytes and the rest of the file as
-         source code.
+let load_input (kind : Kind.t) fn input_name ic =
+  Ocaml_common.Location.input_name := input_name;
+  match Migrate_parsetree.from_channel ic with
+  | Ok (ast_input_name, ast) ->
+    let ast = Ppx_ast.Selected_ast.of_generic_ast ast in
+    if not (Kind.equal kind (Intf_or_impl.kind ast)) then
+      Location.raise_errorf ~loc:(Location.in_file fn)
+        "File contains a binary %s AST but an %s was expected"
+        (Kind.describe (Intf_or_impl.kind ast))
+        (Kind.describe kind);
+    if String.equal ast_input_name input_name then
+      ast
+    else
+      Intf_or_impl.map_with_context ast relocate (ast_input_name, input_name)
+  | Error (Unknown_version _) ->
+    Location.raise_errorf ~loc:(Location.in_file fn)
+      "File is a binary ast for an unknown version of OCaml"
+  | Error (Not_a_binary_ast prefix_read_from_file) ->
+    (* To test if a file is an AST file, we have to read the first few bytes of the
+       file. If it is not, we have to parse these bytes and the rest of the file as
+       source code.
 
-         The compiler just does [seek_on 0] in this case, however this doesn't work when
-         the input is a pipe.
+       The compiler just does [seek_on 0] in this case, however this doesn't work when
+       the input is a pipe.
 
-         What we do instead is create a lexing buffer from the input channel and pre-fill
-         it with what we read to do the test. *)
-      let lexbuf = Lexing.from_channel ic in
-      let len = String.length prefix_read_from_file in
-      String.blit ~src:prefix_read_from_file ~src_pos:0 ~dst:lexbuf.lex_buffer ~dst_pos:0
-        ~len;
-      lexbuf.lex_buffer_len <- len;
-      Location.init lexbuf input_name;
-      match kind with
-      | Kind.Intf -> Resrap.Parse.interface      lexbuf
-      | Kind.Impl -> Resrap.Parse.implementation lexbuf
+       What we do instead is create a lexing buffer from the input channel and pre-fill
+       it with what we read to do the test. *)
+    let lexbuf = Lexing.from_channel ic in
+    let len = String.length prefix_read_from_file in
+    String.blit ~src:prefix_read_from_file ~src_pos:0 ~dst:lexbuf.lex_buffer ~dst_pos:0
+      ~len;
+    lexbuf.lex_buffer_len <- len;
+    lexbuf.lex_curr_p <-
+      { pos_fname = input_name
+      ; pos_lnum  = 1
+      ; pos_bol   = 0
+      ; pos_cnum  = 0
+      };
+    match kind with
+    | Intf -> Intf (Parse.interface      lexbuf)
+    | Impl -> Impl (Parse.implementation lexbuf)
 ;;
 
-let load_source_file kind fn =
+let load_source_file fn =
   let s = In_channel.read_all fn in
-  if string_contains_binary_ast kind s then
+  if string_contains_binary_ast s then
     Location.raise_errorf ~loc:(Location.in_file fn)
       "ppx_driver: cannot use -reconcile with binary AST files";
   s
@@ -521,9 +492,7 @@ type output_mode =
   | Reconcile of Reconcile.mode
   | Null
 
-let process_file
-  : type a. a list Kind.t -> _
-  = fun kind fn ~input_name ~output_mode ~output ->
+let process_file (kind : Kind.t) fn ~input_name ~output_mode ~output =
     let replacements = ref [] in
     let expect_mismatches = ref [] in
     let add_to_list r x = r := x :: !r in
@@ -553,32 +522,31 @@ let process_file
       }
     in
 
-    let ast : a list =
+    let ast : _ Intf_or_impl.t =
       try
         let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
-        match kind with
-        | Kind.Intf -> map_signature_gen ast ~hook ~expect_mismatch_handler
-        | Kind.Impl -> map_structure_gen ast ~hook ~expect_mismatch_handler
+        match ast with
+        | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
+        | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
       with exn when (match output_mode with Dump_ast -> true | _ -> false) ->
-      match Location.error_of_exn exn with
+      match Location.Error.of_exn exn with
       | None -> raise exn
       | Some error ->
-        let mk_ext : loc:_ -> _ -> _ -> a =
-          let open Ast_builder.Default in
-          match kind with
-          | Kind.Intf -> psig_extension
-          | Kind.Impl -> pstr_extension
-        in
-        [ mk_ext ~loc:Location.none (Ast_mapper.extension_of_error error) [] ]
+        let loc = Location.none in
+        let ext = Location.Error.to_extension error in
+        let open Ast_builder.Default in
+        match kind with
+        | Intf -> Intf [ psig_extension ~loc ext [] ]
+        | Impl -> Impl [ pstr_extension ~loc ext [] ]
     in
 
     let null_ast =
-      match kind with
-      | Kind.Intf -> (match ast with [] -> true | _::_ -> false)
-      | Kind.Impl -> (match ast with [] -> true | _::_ -> false)
+      match ast with
+      | Intf [] | Impl [] -> true
+      | _ -> false
     in
 
-    let input_contents = lazy (load_source_file kind fn) in
+    let input_contents = lazy (load_source_file fn) in
     let corrected = fn ^ ".corrected" in
     let mismatches_found =
       match !expect_mismatches with
@@ -588,7 +556,7 @@ let process_file
       | mismatches ->
         Reconcile.reconcile mismatches ~contents:(Lazy.force input_contents)
           ~output:(Some corrected) ~input_filename:fn ~input_name ~target:Corrected
-          ?styler:!styler ~file_type:(Kind.to_file_type kind);
+          ?styler:!styler ~kind;
         true
     in
 
@@ -597,23 +565,27 @@ let process_file
      | Pretty_print ->
        with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in
-         (match kind with
-          | Kind.Intf -> Pprintast.signature ppf ast
-          | Kind.Impl -> Pprintast.structure ppf ast);
+         (match ast with
+          | Intf ast -> Pprintast.signature ppf ast
+          | Impl ast -> Pprintast.structure ppf ast);
          if not null_ast then Caml.Format.pp_print_newline ppf ())
      | Dump_ast ->
-       with_output output ~binary:true ~f:(fun oc -> output_ast oc kind ast)
+       with_output output ~binary:true ~f:(fun oc ->
+         let ast =
+           Migrate_parsetree.ast_of_current (Ppx_ast.Selected_ast.to_ocaml_ast ast)
+         in
+         Migrate_parsetree.to_channel oc input_name ast)
      | Dparsetree ->
        with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in
-         (match kind with
-          | Kind.Intf -> Printast.interface      ppf ast
-          | Kind.Impl -> Printast.implementation ppf ast);
+         (match ast with
+          | Intf ast -> Sexp.pp_hum ppf (Ast_traverse.sexp_of#signature ast)
+          | Impl ast -> Sexp.pp_hum ppf (Ast_traverse.sexp_of#structure ast));
          Caml.Format.pp_print_newline ppf ())
      | Reconcile mode ->
        Reconcile.reconcile !replacements ~contents:(Lazy.force input_contents) ~output
          ~input_filename:fn ~input_name ~target:(Output mode) ?styler:!styler
-         ~file_type:(Kind.to_file_type kind));
+         ~kind);
 
     if mismatches_found then begin
       Print_diff.print () ~file1:fn ~file2:corrected ~use_color:!use_color
@@ -633,9 +605,8 @@ let set_input fn =
   | Some _ -> raise (Arg.Bad "too many input files")
 
 let set_kind k =
-  let k = Kind.T k in
   match !kind with
-  | Some k' when Polymorphic_compare.(<>) k k' ->
+  | Some k' when not (Kind.equal k k') ->
     raise (Arg.Bad "must specify at most one of -impl or -intf")
   | _ -> kind := Some k
 ;;
@@ -720,7 +691,7 @@ let standalone_args =
     "<names> Apply these transformations in order (comma-separated list)"
   ; "-no-merge", Arg.Set no_merge,
     " Do not merge context free transformations (better for debugging rewriters)"
-  ; "-ite-check", Arg.Set Resrap.Warn.care_about_ite_branch,
+  ; "-ite-check", Arg.Set Extra_warnings.care_about_ite_branch,
     " Enforce that \"complex\" if branches are delimited (disabled if -pp is given)"
   ; "-pp", Arg.String (fun s -> preprocessor := Some s),
     "<command>  Pipe sources through preprocessor <command> (incompatible with -as-ppx)"
@@ -766,7 +737,7 @@ let standalone_main () =
     eprintf "%s: no input file given\n%!" exe_name;
     Caml.exit 2
   | Some fn ->
-    let Kind.T kind =
+    let kind =
       match !kind with
       | Some k -> k
       | None ->
@@ -810,7 +781,8 @@ let standalone_run_as_ppx_rewriter () =
   | exception Arg.Bad  msg -> eprintf "%s" msg; Caml.exit 2
   | exception Arg.Help msg -> eprintf "%s" msg; Caml.exit 0
   | () ->
-    Ast_mapper.apply ~source:Caml.Sys.argv.(n - 2) ~target:Caml.Sys.argv.(n - 1) mapper
+    Ocaml_common.Ast_mapper.apply
+      ~source:Caml.Sys.argv.(n - 2) ~target:Caml.Sys.argv.(n - 1) mapper
 ;;
 
 let standalone () =

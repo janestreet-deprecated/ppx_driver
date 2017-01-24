@@ -1,7 +1,7 @@
 (* -*- tuareg -*- *)
 
 #directory "+compiler-libs";;
-open Ppx_core.Std
+open Ppx_core
 
 let x = 1 [@@foo]
 [%%expect{|

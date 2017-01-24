@@ -5,29 +5,30 @@ module Context = struct
     | Extension          of 'a Extension.Context.t
     | Floating_attribute of 'a Attribute.Floating.Context.t
 
-  let printer = new Pprintast.printer ()
+  let paren pp ppf x =
+    Caml.Format.fprintf ppf "(%a)" pp x
 
   let printer
     : type a. a t -> Caml.Format.formatter -> a -> unit =
     let open Extension.Context in
     let open Attribute.Floating.Context in
     function
-    | Extension Class_expr       -> printer#class_expr
-    | Extension Class_field      -> printer#class_field
-    | Extension Class_type       -> printer#class_type
-    | Extension Class_type_field -> assert false
-    | Extension Core_type        -> printer#paren true printer#core_type
-    | Extension Expression       -> printer#paren true printer#expression
-    | Extension Module_expr      -> printer#module_expr
-    | Extension Module_type      -> printer#module_type
-    | Extension Pattern          -> printer#paren true printer#pattern
-    | Extension Signature_item   -> printer#signature_item
-    | Extension Structure_item   -> printer#structure_item
+    | Extension Class_expr       -> Pprintast.class_expr
+    | Extension Class_field      -> Pprintast.class_field
+    | Extension Class_type       -> Pprintast.class_type
+    | Extension Class_type_field -> Pprintast.class_type_field
+    | Extension Core_type        -> paren Pprintast.core_type
+    | Extension Expression       -> paren Pprintast.expression
+    | Extension Module_expr      -> Pprintast.module_expr
+    | Extension Module_type      -> Pprintast.module_type
+    | Extension Pattern          -> paren Pprintast.pattern
+    | Extension Signature_item   -> Pprintast.signature_item
+    | Extension Structure_item   -> Pprintast.structure_item
 
-    | Floating_attribute Structure_item   -> printer#structure_item
-    | Floating_attribute Signature_item   -> printer#signature_item
-    | Floating_attribute Class_field      -> printer#class_field
-    | Floating_attribute Class_type_field -> assert false
+    | Floating_attribute Structure_item   -> Pprintast.structure_item
+    | Floating_attribute Signature_item   -> Pprintast.signature_item
+    | Floating_attribute Class_field      -> Pprintast.class_field
+    | Floating_attribute Class_type_field -> Pprintast.class_type_field
 end
 
 module Replacement = struct
@@ -160,15 +161,13 @@ let skip_blank_eol contents (pos : Lexing.position) =
   in
   loop pos.pos_cnum
 
-type file_type = Impl | Intf
-
-let with_output ~styler ~file_type fn ~f =
+let with_output ~styler ~(kind:Kind.t) fn ~f =
   match styler with
   | None -> with_output fn ~binary:false ~f
   | Some cmd ->
     let tmp_fn, oc =
       Caml.Filename.open_temp_file "ppx_driver"
-        (match file_type with Impl -> ".ml" | Intf -> ".mli")
+        (match kind with Impl -> ".ml" | Intf -> ".mli")
     in
     let cmd =
       Printf.sprintf "%s %s%s" cmd (Caml.Filename.quote tmp_fn)
@@ -186,7 +185,7 @@ let with_output ~styler ~file_type fn ~f =
       Caml.exit 1
     end
 
-let reconcile ?styler (repls : Replacements.t) ~file_type ~contents ~input_filename
+let reconcile ?styler (repls : Replacements.t) ~kind ~contents ~input_filename
       ~output ~input_name ~target =
   let repls = Replacements.check_and_sort ~input_filename ~input_name repls in
   let output_name =
@@ -194,7 +193,7 @@ let reconcile ?styler (repls : Replacements.t) ~file_type ~contents ~input_filen
     | None -> "<stdout>"
     | Some fn -> fn
   in
-  with_output output ~styler ~file_type ~f:(fun oc ->
+  with_output output ~styler ~kind ~f:(fun oc ->
     let copy_input pos ~up_to ~line =
       let pos = skip_blank_eol contents pos in
       if pos.pos_cnum < up_to then begin
