@@ -170,6 +170,31 @@ let register_code_transformation ~name ~impl ~intf =
   register_transformation name ~impl ~intf
 ;;
 
+let register_transformation_using_ocaml_current_ast  ?impl ?intf name =
+  let module Ocaml = Migrate_parsetree.Ast_current in
+  let module Js = Ppx_ast.Selected_ast in
+  let impl =
+    Option.map impl ~f:(fun f st ->
+      Js.ast_of_impl st
+      |> Js.to_ocaml_ast
+      |> Ocaml.impl_of_ast
+      |> f
+      |> Ocaml.ast_of_impl
+      |> Js.of_ocaml_ast
+      |> Js.impl_of_ast)
+  in
+  let intf =
+    Option.map intf ~f:(fun f sg ->
+      Js.ast_of_intf sg
+      |> Js.to_ocaml_ast
+      |> Ocaml.intf_of_ast
+      |> f
+      |> Ocaml.ast_of_intf
+      |> Js.of_ocaml_ast
+      |> Js.intf_of_ast)
+  in
+  register_transformation ?impl ?intf name
+
 let debug_dropped_attribute name ~old_dropped ~new_dropped =
   let print_diff what a b =
     let diff =
