@@ -36,6 +36,20 @@ val register_transformation
   -> string
   -> unit
 
+(** Same as [register_transformation] except that it uses the same AST as the current
+    ocaml compiler.  In ppx_driver 113.33.* this is the same as [register_transformation],
+    but with newer versions this converts the AST used by ppx_ast to the one used by the
+    compiler and back.
+
+    This is not the intended way of using ppx_driver. This is only for ppx rewriters that
+    are not written using ppx_core and want to export a ppx_driver version of themselves.
+*)
+val register_transformation_using_ocaml_current_ast
+  :  ?impl       : (structure -> structure)
+  -> ?intf       : (signature -> signature)
+  -> string
+  -> unit
+
 (** Same as:
 
     {[

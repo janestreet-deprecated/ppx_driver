@@ -59,6 +59,10 @@ let register_code_transformation ~name ~impl ~intf =
   register_transformation name ~impl ~intf
 ;;
 
+let register_transformation_using_ocaml_current_ast ?impl ?intf name =
+  register_transformation ?impl ?intf name
+;;
+
 let debug_dropped_attribute name ~old_dropped ~new_dropped =
   let print_diff what a b =
     let diff =
