@@ -1,8 +1,9 @@
 ;; This library just contain the entry point for ppx drivers. It must
 ;; be linked after all other libraries and units.
-(library
- ((name ppx_driver_runner)
-  (public_name ppx_driver.runner)
-  (library_flags (-linkall))
+(executables
+ ((names (ppx_driver_runner))
+  (object_public_name ppx_driver.runner)
   (libraries (ppx_driver))
   (preprocess no_preprocessing)))
+
+(provides ppx_driver:ppx_driver_runner.cmx)
