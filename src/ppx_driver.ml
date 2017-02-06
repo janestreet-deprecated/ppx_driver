@@ -171,28 +171,8 @@ let register_code_transformation ~name ~impl ~intf =
 ;;
 
 let register_transformation_using_ocaml_current_ast  ?impl ?intf name =
-  let module Ocaml = Migrate_parsetree.Ast_current in
-  let module Js = Ppx_ast.Selected_ast in
-  let impl =
-    Option.map impl ~f:(fun f st ->
-      Js.ast_of_impl st
-      |> Js.to_ocaml_ast
-      |> Ocaml.impl_of_ast
-      |> f
-      |> Ocaml.ast_of_impl
-      |> Js.of_ocaml_ast
-      |> Js.impl_of_ast)
-  in
-  let intf =
-    Option.map intf ~f:(fun f sg ->
-      Js.ast_of_intf sg
-      |> Js.to_ocaml_ast
-      |> Ocaml.intf_of_ast
-      |> f
-      |> Ocaml.ast_of_intf
-      |> Js.of_ocaml_ast
-      |> Js.intf_of_ast)
-  in
+  let impl = Option.map impl ~f:(Ppx_ast.Selected_ast.of_ocaml_mapper Structure) in
+  let intf = Option.map intf ~f:(Ppx_ast.Selected_ast.of_ocaml_mapper Signature) in
   register_transformation ?impl ?intf name
 
 let debug_dropped_attribute name ~old_dropped ~new_dropped =
@@ -351,26 +331,9 @@ let map_signature sg =
     ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
 
 let mapper =
-  let module Ocaml = Migrate_parsetree.Ast_current in
   let module Js = Ppx_ast.Selected_ast in
-  let structure _ st =
-    Ocaml.ast_of_impl st
-    |> Js.of_ocaml_ast
-    |> Js.impl_of_ast
-    |> map_structure
-    |> Js.ast_of_impl
-    |> Js.to_ocaml_ast
-    |> Ocaml.impl_of_ast
-  in
-  let signature _ sg =
-    Ocaml.ast_of_intf sg
-    |> Js.of_ocaml_ast
-    |> Js.intf_of_ast
-    |> map_signature
-    |> Js.ast_of_intf
-    |> Js.to_ocaml_ast
-    |> Ocaml.intf_of_ast
-  in
+  let structure _ st = Js.to_ocaml_mapper Structure map_structure st in
+  let signature _ sg = Js.to_ocaml_mapper Signature map_signature sg in
   { Ocaml_common.Ast_mapper.default_mapper with structure; signature }
 ;;
 
@@ -461,9 +424,9 @@ end
 
 let load_input (kind : Kind.t) fn input_name ic =
   Ocaml_common.Location.input_name := input_name;
-  match Migrate_parsetree.from_channel ic with
+  match Migrate_parsetree.Ast_io.from_channel ic with
   | Ok (ast_input_name, ast) ->
-    let ast = Ppx_ast.Selected_ast.of_generic_ast ast in
+    let ast = Intf_or_impl.of_ast_io ast in
     if not (Kind.equal kind (Intf_or_impl.kind ast)) then
       Location.raise_errorf ~loc:(Location.in_file fn)
         "File contains a binary %s AST but an %s was expected"
@@ -547,7 +510,7 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~output =
       }
     in
 
-    let ast : _ Intf_or_impl.t =
+    let ast : Intf_or_impl.t =
       try
         let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
         match ast with
@@ -596,10 +559,8 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~output =
          if not null_ast then Caml.Format.pp_print_newline ppf ())
      | Dump_ast ->
        with_output output ~binary:true ~f:(fun oc ->
-         let ast =
-           Migrate_parsetree.ast_of_current (Ppx_ast.Selected_ast.to_ocaml_ast ast)
-         in
-         Migrate_parsetree.to_channel oc input_name ast)
+         let ast = Intf_or_impl.to_ast_io ast in
+         Migrate_parsetree.Ast_io.to_channel oc input_name ast)
      | Dparsetree ->
        with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in

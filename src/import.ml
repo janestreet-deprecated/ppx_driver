@@ -27,9 +27,9 @@ module Kind = struct
 end
 
 module Intf_or_impl = struct
-  type ('a, 'b) t = ('a, 'b) Migrate_parsetree.intf_or_impl =
-    | Intf of 'a
-    | Impl of 'b
+  type t =
+    | Intf of signature
+    | Impl of structure
 
   let map t (map : Ast_traverse.map) =
     match t with
@@ -46,8 +46,28 @@ module Intf_or_impl = struct
   let kind : _ -> Kind.t = function
     | Intf _ -> Intf
     | Impl _ -> Impl
-end
 
+  let of_ast_io ast : t =
+    let open Migrate_parsetree in
+    match ast with
+    | Ast_io.Intf ((module Ver), sg) ->
+      let module C = Versions.Convert(Ver)(Ppx_ast.Selected_ast) in
+      Intf (C.copy_signature sg)
+    | Ast_io.Impl ((module Ver), st) ->
+      let module C = Versions.Convert(Ver)(Ppx_ast.Selected_ast) in
+      Impl (C.copy_structure st)
+
+  let to_ast_io (ast : t) =
+    let open Migrate_parsetree in
+    match ast with
+    | Intf sg ->
+      Ast_io.Intf ((module Versions.OCaml_current),
+                   Ppx_ast.Selected_ast.to_ocaml Signature sg)
+    | Impl st ->
+      Ast_io.Impl ((module Versions.OCaml_current),
+                   Ppx_ast.Selected_ast.to_ocaml Structure st)
+end
+(*
 let map_impl x ~(f : _ Intf_or_impl.t -> _ Intf_or_impl.t) =
   match f (Impl x) with
   | Impl x -> x
@@ -57,3 +77,4 @@ let map_intf x ~(f : _ Intf_or_impl.t -> _ Intf_or_impl.t) =
   match f (Intf x) with
   | Intf x -> x
   | Impl _ -> assert false
+*)

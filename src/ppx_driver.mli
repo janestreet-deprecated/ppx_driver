@@ -60,10 +60,10 @@ val register_transformation
     library.
 *)
 val register_transformation_using_ocaml_current_ast
-  :  ?impl : (Migrate_parsetree.Ast_current.Parsetree.structure ->
-              Migrate_parsetree.Ast_current.Parsetree.structure)
-  -> ?intf : (Migrate_parsetree.Ast_current.Parsetree.signature ->
-              Migrate_parsetree.Ast_current.Parsetree.signature)
+  :  ?impl : (Migrate_parsetree.OCaml_current.Ast.Parsetree.structure ->
+              Migrate_parsetree.OCaml_current.Ast.Parsetree.structure)
+  -> ?intf : (Migrate_parsetree.OCaml_current.Ast.Parsetree.signature ->
+              Migrate_parsetree.OCaml_current.Ast.Parsetree.signature)
   -> string
   -> unit
 
