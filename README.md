@@ -43,7 +43,7 @@ If using jbuilder, you can just use the following jbuild file:
   (kind ppx_rewriter)
   (libraries (ppx_core ppx_driver))
   (ppx_runtime_libraries (<runtime dependencies if any>))
-  (preprocess metaquot)))
+  (preprocess (pps (ppx_metaquot)))))
 ```
 
 `(kind ppx_driver)` has two effects:

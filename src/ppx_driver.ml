@@ -642,6 +642,16 @@ let set_apply_list s =
 
 let use_optcomp = ref true
 
+let () =
+  let shared_args =
+    [ "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
+      "<string> Mark the given namespace as reserved"
+    ; "-no-check", Arg.Clear perform_checks,
+      " Disable checks (unsafe)"
+    ]
+  in
+  List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
+
 let standalone_args =
   [ "-as-ppx", Arg.Unit (fun () -> raise (Arg.Bad "-as-ppx must be the first argument")),
     " Run as a -ppx rewriter (must be the first argument)"
@@ -649,8 +659,6 @@ let standalone_args =
     "<filename> Output file (use '-' for stdout)"
   ; "-", Arg.Unit (fun () -> set_input "-"),
     " Read input from stdin"
-  ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
-    "<string> Mark the given namespace as reserved"
   ; "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
     "<string> File name to use in locations"
   ; "-no-optcomp", Arg.Clear use_optcomp,
@@ -665,8 +673,6 @@ let standalone_args =
     "<file> Treat the input as a .ml file"
   ; "-intf", Arg.Unit (fun () -> set_kind Intf),
     "<file> Treat the input as a .mli file"
-  ; "-no-check", Arg.Clear perform_checks,
-    " Disable checks (unsafe)"
   ; "-debug-attribute-drop", Arg.Set debug_attribute_drop,
     " Debug attribute dropping"
   ; "-print-transformations", Arg.Set request_print_transformations,
