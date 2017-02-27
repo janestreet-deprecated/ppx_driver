@@ -6,3 +6,5 @@
   (library_flags (-linkall))
   (libraries (ppx_driver))
   (preprocess no_preprocessing)))
+
+(jbuild_version jane_street)

@@ -4,3 +4,5 @@
   (libraries (ocamlbuild))
   (flags (:standard -I +ocamlbuild))
   (preprocess no_preprocessing)))
+
+(jbuild_version jane_street)

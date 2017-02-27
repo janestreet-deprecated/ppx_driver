@@ -1,3 +1,5 @@
 (alias
  ((name DEFAULT)
   (deps (${ROOT}/.ppx/ppx_jane/ppx.exe))))
+
+(jbuild_version jane_street)

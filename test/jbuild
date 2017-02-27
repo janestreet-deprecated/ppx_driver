@@ -20,3 +20,5 @@
             -dirname blah -loc-filename example.ml -o ${@}")))
 
 (enforce_style ())
+
+(jbuild_version jane_street)
