@@ -56,7 +56,7 @@ let dispatch = function
                   ; A "-linkpkg"
                   ; A "-o"; A (env target)
                   ; A "-package"; A (String.concat "," pkgs)
-                  ; A ("ppx_driver_runner." ^ archive_suffix)
+                  ; A ("runner/ppx_driver_runner." ^ archive_suffix)
                   ]))
     end
   | _ -> ()
