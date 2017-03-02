@@ -480,7 +480,7 @@ type output_mode =
   | Reconcile of Reconcile.mode
   | Null
 
-let process_file (kind : Kind.t) fn ~input_name ~output_mode ~output =
+let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~output =
     let replacements = ref [] in
     let expect_mismatches = ref [] in
     let add_to_list r x = r := x :: !r in
@@ -516,7 +516,7 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~output =
         match ast with
         | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
         | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
-      with exn when (match output_mode with Dump_ast -> true | _ -> false) ->
+      with exn when embed_errors ->
       match Location.Error.of_exn exn with
       | None -> raise exn
       | Some error ->
@@ -585,6 +585,7 @@ let output_mode = ref Pretty_print
 let output = ref None
 let kind = ref None
 let input = ref None
+let embed_errors = ref None
 let set_input fn =
   match !input with
   | None -> input := Some fn
@@ -623,31 +624,70 @@ let print_transformations () =
     printf "%s\n" ct.name);
 ;;
 
-let set_apply_list s =
-  let rec split i j =
-    if j = String.length s then
-      [String.sub s ~pos:i ~len:(j - i)]
-    else if Char.equal s.[j] ',' then
-      String.sub s ~pos:i ~len:(j - i) :: split (j + 1) (j + 1)
-    else
-      split i (j + 1)
-  in
-  let names = if String.equal s "" then [] else split 0 0 in
+let parse_apply_list s =
+  let names = if String.equal s "" then [] else String.split s ~on:',' in
   List.iter names ~f:(fun name ->
     if not (List.exists !Transform.all ~f:(fun (ct : Transform.t) ->
       String.equal ct.name name)) then
       raise (Caml.Arg.Bad (Printf.sprintf "code transformation '%s' does not exist" name)));
-  apply_list := Some names
-;;
+  names
+
+type mask =
+  { mutable apply      : string list option
+  ; mutable dont_apply : string list option
+  }
+
+let mask =
+  { apply      = None
+  ; dont_apply = None
+  }
+
+let handle_apply s =
+  if Option.is_some mask.apply then
+    raise (Arg.Bad "-apply called too many times");
+  (* This is not strictly necessary but it's more intuitive *)
+  if Option.is_some mask.dont_apply then
+    raise (Arg.Bad "-apply must be called before -dont-apply");
+  mask.apply <- Some (parse_apply_list s)
+
+let handle_dont_apply s =
+  if Option.is_some mask.dont_apply then
+    raise (Arg.Bad "-apply called too many times");
+  mask.dont_apply <- Some (parse_apply_list s)
+
+let interpret_mask () =
+  if Option.is_some mask.apply || Option.is_some mask.dont_apply then begin
+    let names =
+      match mask.apply with
+      | None -> List.map !Transform.all ~f:(fun (ct : Transform.t) -> ct.name)
+      | Some names -> names
+    in
+    let forbidden =
+      match mask.dont_apply with
+      | None -> Set.empty (module String)
+      | Some names -> Set.of_list (module String) names
+    in
+    apply_list :=
+      Some (List.filter names ~f:(fun name ->
+        not (Set.mem forbidden name)))
+  end
 
 let use_optcomp = ref true
 
 let () =
   let shared_args =
-    [ "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
+    [ "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
+      "<string> File name to use in locations"
+    ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
       "<string> Mark the given namespace as reserved"
     ; "-no-check", Arg.Clear perform_checks,
       " Disable checks (unsafe)"
+    ; "-apply", Arg.String handle_apply,
+      "<names> Apply these transformations in order (comma-separated list)"
+    ; "-dont-apply", Arg.String handle_dont_apply,
+      "<names> Exclude these transformations"
+    ; "-no-merge", Arg.Set no_merge,
+      " Do not merge context free transformations (better for debugging rewriters)"
     ]
   in
   List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
@@ -659,14 +699,14 @@ let standalone_args =
     "<filename> Output file (use '-' for stdout)"
   ; "-", Arg.Unit (fun () -> set_input "-"),
     " Read input from stdin"
-  ; "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
-    "<string> File name to use in locations"
   ; "-no-optcomp", Arg.Clear use_optcomp,
     " Do not use optcomp (default if the input or output of -pp is a binary AST)"
   ; "-dump-ast", Arg.Unit (fun () -> set_output_mode Dump_ast),
     " Dump the marshaled ast to the output file instead of pretty-printing it"
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
     " Print the parsetree (same as ocamlc -dparsetree)"
+  ; "-embed-errors", Arg.Bool (fun x -> embed_errors := Some x),
+    " Embed errors in the output AST (default: true when -dump-ast, false otherwise)"
   ; "-null", Arg.Unit (fun () -> set_output_mode Null),
     " Produce no output, except for errors"
   ; "-impl", Arg.Unit (fun () -> set_kind Impl),
@@ -679,10 +719,6 @@ let standalone_args =
     " Print linked-in code transformations, in the order they are applied"
   ; "-print-passes", Arg.Set request_print_passes,
     " Print the actual passes over the whole AST in the order they are applied"
-  ; "-apply", Arg.String set_apply_list,
-    "<names> Apply these transformations in order (comma-separated list)"
-  ; "-no-merge", Arg.Set no_merge,
-    " Do not merge context free transformations (better for debugging rewriters)"
   ; "-ite-check", Arg.Set Extra_warnings.care_about_ite_branch,
     " Enforce that \"complex\" if branches are delimited (disabled if -pp is given)"
   ; "-pp", Arg.String (fun s -> preprocessor := Some s),
@@ -715,6 +751,7 @@ let standalone_main () =
   in
   let args = List.rev_append !args standalone_args in
   Arg.parse (Arg.align args) set_input usage;
+  interpret_mask ();
   if !request_print_transformations then begin
     print_transformations ();
     Caml.exit 0;
@@ -745,7 +782,16 @@ let standalone_main () =
       | None    -> fn
       | Some fn -> fn
     in
+    let embed_errors =
+      match !embed_errors with
+      | Some x -> x
+      | None ->
+        match !output_mode with
+        | Dump_ast -> true
+        | _        -> false
+    in
     process_file kind fn ~input_name ~output_mode:!output_mode ~output:!output
+      ~embed_errors
 ;;
 
 let standalone_run_as_ppx_rewriter () =
@@ -773,6 +819,7 @@ let standalone_run_as_ppx_rewriter () =
   | exception Arg.Bad  msg -> eprintf "%s" msg; Caml.exit 2
   | exception Arg.Help msg -> eprintf "%s" msg; Caml.exit 0
   | () ->
+    interpret_mask ();
     Ocaml_common.Ast_mapper.apply
       ~source:Caml.Sys.argv.(n - 2) ~target:Caml.Sys.argv.(n - 1) mapper
 ;;

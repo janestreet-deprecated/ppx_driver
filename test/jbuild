@@ -5,8 +5,6 @@
   (lint (pps (ppx_sexp_conv ppx_compare -pretty)))
   (preprocess no_preprocessing)))
 
-(toplevel_expect_tests
- ((libraries (ppx_driver))))
 
 (alias
  ((name     runtest)
@@ -19,6 +17,5 @@
   (action  "${^} -inline-test-lib foo -reconcile \
             -dirname blah -loc-filename example.ml -o ${@}")))
 
-(enforce_style ())
 
 (jbuild_version jane_street)

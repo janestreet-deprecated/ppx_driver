@@ -2,6 +2,6 @@
  ((name print_diff)
   (public_name ppx_driver.print_diff)
   (preprocess no_preprocessing)
-  (js_of_ocaml ())))
+))
 
 (jbuild_version jane_street)
