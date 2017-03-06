@@ -7,6 +7,4 @@
   (library_flags (-linkall))
   (preprocess    no_preprocessing)))
 
-(provides ppx_driver:ppx_driver_runner.cmx)
-
 (jbuild_version jane_street)

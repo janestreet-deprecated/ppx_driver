@@ -695,6 +695,8 @@ let () =
 let standalone_args =
   [ "-as-ppx", Arg.Unit (fun () -> raise (Arg.Bad "-as-ppx must be the first argument")),
     " Run as a -ppx rewriter (must be the first argument)"
+  ; "--as-ppx", Arg.Unit (fun () -> raise (Arg.Bad "--as-ppx must be the first argument")),
+    " Same as -as-ppx"
   ; "-o", Arg.String (fun s -> output := Some s),
     "<filename> Output file (use '-' for stdout)"
   ; "-", Arg.Unit (fun () -> set_input "-"),
@@ -703,6 +705,8 @@ let standalone_args =
     " Do not use optcomp (default if the input or output of -pp is a binary AST)"
   ; "-dump-ast", Arg.Unit (fun () -> set_output_mode Dump_ast),
     " Dump the marshaled ast to the output file instead of pretty-printing it"
+  ; "--dump-ast", Arg.Unit (fun () -> set_output_mode Dump_ast),
+    " Same as -dump-ast"
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
     " Print the parsetree (same as ocamlc -dparsetree)"
   ; "-embed-errors", Arg.Bool (fun x -> embed_errors := Some x),
@@ -711,8 +715,12 @@ let standalone_args =
     " Produce no output, except for errors"
   ; "-impl", Arg.Unit (fun () -> set_kind Impl),
     "<file> Treat the input as a .ml file"
+  ; "--impl", Arg.Unit (fun () -> set_kind Impl),
+    "<file> Same as -impl"
   ; "-intf", Arg.Unit (fun () -> set_kind Intf),
     "<file> Treat the input as a .mli file"
+  ; "--intf", Arg.Unit (fun () -> set_kind Intf),
+    "<file> Same as -intf"
   ; "-debug-attribute-drop", Arg.Set debug_attribute_drop,
     " Debug attribute dropping"
   ; "-print-transformations", Arg.Set request_print_transformations,
@@ -826,7 +834,11 @@ let standalone_run_as_ppx_rewriter () =
 
 let standalone () =
   try
-    if Array.length Caml.Sys.argv >= 2 && String.equal Caml.Sys.argv.(1) "-as-ppx" then
+    if Array.length Caml.Sys.argv >= 2 &&
+       match Caml.Sys.argv.(1) with
+       | "-as-ppx" | "--as-ppx" -> true
+       | _ -> false
+    then
       standalone_run_as_ppx_rewriter ()
     else
       standalone_main ()

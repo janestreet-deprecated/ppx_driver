@@ -9,7 +9,7 @@ build: [
   ["jbuilder" "build" "--only-packages" "ppx_driver" "--root" "." "-j" jobs "@install"]
 ]
 depends: [
-  "jbuilder"
+  "jbuilder"    {build}
   "ppx_core"
   "ppx_optcomp"
   "ocamlbuild"

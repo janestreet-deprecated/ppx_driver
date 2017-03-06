@@ -1,5 +1,7 @@
-Ppx\_driver - driver for AST transformers
-=========================================
+---
+title: ppx_driver - driver for AST transformers
+parent: ../README.md
+---
 
 A driver is an executable created from a set of OCaml AST transformers
 linked together with a command line frontend.
