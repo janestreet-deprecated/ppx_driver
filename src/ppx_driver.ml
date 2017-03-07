@@ -353,7 +353,8 @@ let as_ppx_rewriter_main argv =
 
 let run_as_ppx_rewriter () =
   perform_checks := false;
-  Ocaml_common.Ast_mapper.run_main as_ppx_rewriter_main
+  Ocaml_common.Ast_mapper.run_main as_ppx_rewriter_main;
+  Caml.exit 0
 
 let string_contains_binary_ast s =
   let test magic_number =
@@ -674,22 +675,22 @@ let interpret_mask () =
 
 let use_optcomp = ref true
 
+let shared_args =
+  [ "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
+    "<string> File name to use in locations"
+  ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
+    "<string> Mark the given namespace as reserved"
+  ; "-no-check", Arg.Clear perform_checks,
+    " Disable checks (unsafe)"
+  ; "-apply", Arg.String handle_apply,
+    "<names> Apply these transformations in order (comma-separated list)"
+  ; "-dont-apply", Arg.String handle_dont_apply,
+    "<names> Exclude these transformations"
+  ; "-no-merge", Arg.Set no_merge,
+    " Do not merge context free transformations (better for debugging rewriters)"
+  ]
+
 let () =
-  let shared_args =
-    [ "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
-      "<string> File name to use in locations"
-    ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
-      "<string> Mark the given namespace as reserved"
-    ; "-no-check", Arg.Clear perform_checks,
-      " Disable checks (unsafe)"
-    ; "-apply", Arg.String handle_apply,
-      "<names> Apply these transformations in order (comma-separated list)"
-    ; "-dont-apply", Arg.String handle_dont_apply,
-      "<names> Exclude these transformations"
-    ; "-no-merge", Arg.Set no_merge,
-      " Do not merge context free transformations (better for debugging rewriters)"
-    ]
-  in
   List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
 
 let standalone_args =
@@ -841,10 +842,29 @@ let standalone () =
     then
       standalone_run_as_ppx_rewriter ()
     else
-      standalone_main ()
+      standalone_main ();
+    Caml.exit 0
   with exn ->
     Location.report_exception Caml.Format.err_formatter exn;
     Caml.exit 1
 ;;
 
 let pretty () = !pretty
+
+let () =
+  (* Register ppx_driver as a single Migrate_driver rewriter so that ppx_driver based
+     rewriters can be used with ocaml-migrate-parsetree.driver-main *)
+  let mapper =
+    let module A = Ppx_ast.Selected_ast.Ast.Ast_mapper in
+    let structure _ st = map_structure st in
+    let signature _ sg = map_signature sg in
+    { A.default_mapper with structure; signature }
+  in
+  Migrate_driver.register
+    ~name:"ppx_driver"
+    (* This doesn't take arguments registered by rewriters. It's not worth supporting
+       them, since [--cookie] is a much better replacement for passing parameters to
+       individual rewriters. *)
+    ~args:shared_args
+    (module Ppx_ast.Selected_ast)
+    (fun _config _cookie _anons -> mapper)

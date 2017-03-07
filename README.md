@@ -22,11 +22,13 @@ The recommended way to use rewriters based on Ppx\_driver is through
 add this line to your `(library ...)` or `(executables ...)` stanza:
 
 ```scheme
-(preprocess (pps rewriter1 rewriter2 ...))
+(preprocess (pps (rewriter1 rewriter2 ... ppx_driver.runner)))
 ```
 
 jbuilder will automatically build a static driver including all these
-rewriters.
+rewriters. Note the `ppx_driver.runner` at the end of the list, it
+will still work if you don't put but some specific features of
+ppx_driver won't be available.
 
 If you are not using jbuilder, you can:
 - use the the ocamlbuild plugin provided with Ppx\_driver

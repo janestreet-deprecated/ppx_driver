@@ -9,9 +9,10 @@ build: [
   ["jbuilder" "build" "--only-packages" "ppx_driver" "--root" "." "-j" jobs "@install"]
 ]
 depends: [
-  "jbuilder"    {build}
+  "jbuilder"                {build}
   "ppx_core"
   "ppx_optcomp"
+  "ocaml-migrate-parsetree"
   "ocamlbuild"
 ]
 available: [ ocaml-version >= "4.03.0" ]
