@@ -867,4 +867,4 @@ let () =
        individual rewriters. *)
     ~args:shared_args
     (module Ppx_ast.Selected_ast)
-    (fun _config _cookie _anons -> mapper)
+    (fun _config _cookie -> mapper)
