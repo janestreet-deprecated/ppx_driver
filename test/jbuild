@@ -18,4 +18,4 @@
             -dirname blah -loc-filename example.ml -o ${@}"))))
 
 
-(jbuild_version jane_street)
+(jbuild_version 1)
