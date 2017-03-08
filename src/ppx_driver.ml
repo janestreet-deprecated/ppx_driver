@@ -860,7 +860,7 @@ let () =
     let signature _ sg = map_signature sg in
     { A.default_mapper with structure; signature }
   in
-  Migrate_driver.register
+  Migrate_parsetree.Driver.register
     ~name:"ppx_driver"
     (* This doesn't take arguments registered by rewriters. It's not worth supporting
        them, since [--cookie] is a much better replacement for passing parameters to

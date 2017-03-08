@@ -5,7 +5,7 @@
               ppx_core
               ppx_optcomp
               print_diff
-              ocaml-migrate-parsetree.driver))
+              ocaml-migrate-parsetree))
   (preprocess no_preprocessing)
   ))
 
