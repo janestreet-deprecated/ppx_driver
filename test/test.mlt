@@ -66,4 +66,39 @@ Line _, characters 14-17:
 Attribute `foo' was silently dropped
 |}];;
 
+(* Linters *)
+
+let lint = object
+  inherit [Ppx_driver.Lint_error.t list] Ast_traverse.fold as super
+
+  method! type_declaration td acc =
+    let acc = super#type_declaration td acc in
+    match td.ptype_kind with
+    | Ptype_record lds ->
+      if Poly.(<>)
+           (List.sort lds ~cmp:(fun a b -> String.compare a.pld_name.txt b.pld_name.txt))
+           lds
+      then
+        Ppx_driver.Lint_error.of_string td.ptype_loc
+          "Fields are not sorted!"
+        :: acc
+      else
+        acc
+    | _ -> acc
+end
+let () =
+  Ppx_driver.register_transformation "lint" ~lint_impl:(fun st -> lint#structure st [])
+
+type t =
+  { b : int
+  ; a : int
+  }
+
+[%%expect{|
+Line _, characters 0-36:
+Warning 22: Fields are not sorted!
+Line _:
+Error: Some fatal warnings were triggered (1 occurrences)
+|}]
+
 (* vim: set ft=ocaml: *)

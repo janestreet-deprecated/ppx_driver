@@ -20,11 +20,19 @@ let diff_command = ref None
 let pretty = ref false
 let styler = ref None
 
+module Lint_error = struct
+  type t = Location.t * string
+
+  let of_string loc s = (loc, s)
+end
+
 module Transform = struct
   type t =
     { name          : string
     ; impl          : (Parsetree.structure -> Parsetree.structure) option
     ; intf          : (Parsetree.signature -> Parsetree.signature) option
+    ; lint_impl     : (Parsetree.structure -> Lint_error.t list) option
+    ; lint_intf     : (Parsetree.signature -> Lint_error.t list) option
     ; enclose_impl  : (Location.t option -> Parsetree.structure * Parsetree.structure) option
     ; enclose_intf  : (Location.t option -> Parsetree.signature * Parsetree.signature) option
     ; rules         : Context_free.Rule.t list
@@ -40,7 +48,7 @@ module Transform = struct
   ;;
 
   let register ?(extensions=[]) ?(rules=[]) ?enclose_impl ?enclose_intf
-        ?impl ?intf name =
+        ?impl ?intf ?lint_impl ?lint_intf name =
     let rules =
       List.map extensions ~f:Context_free.Rule.extension @ rules
     in
@@ -59,6 +67,8 @@ module Transform = struct
       ; enclose_intf
       ; impl
       ; intf
+      ; lint_impl
+      ; lint_intf
       ; registered_at = caller_id
       }
     in
@@ -157,11 +167,37 @@ module Transform = struct
       { name = "<bultin:context-free>"
       ; impl = None
       ; intf = None
+      ; lint_impl = None
+      ; lint_intf = None
       ; enclose_impl
       ; enclose_intf
       ; rules
       ; registered_at = Caller_id.get ~skip:[]
       }
+
+  let extract_linters ts =
+    (`Linters
+       (List.filter_map ts ~f:(fun t ->
+          if Option.is_some t.lint_impl || Option.is_some t.lint_intf then
+            Some
+              { name = Printf.sprintf "<lint:%s>" t.name
+              ; impl = None
+              ; intf = None
+              ; lint_impl = t.lint_impl
+              ; lint_intf = t.lint_intf
+              ; enclose_impl = None
+              ; enclose_intf = None
+              ; rules = []
+              ; registered_at = t.registered_at
+              }
+          else
+            None)),
+     `Without_linters
+       (List.map ts ~f:(fun t ->
+          { t with
+            lint_impl = None
+          ; lint_intf = None
+          })))
 end
 
 let register_transformation = Transform.register
@@ -202,6 +238,7 @@ let get_whole_ast_passes ~hook ~expect_mismatch_handler =
         List.find_exn !Transform.all ~f:(fun (ct : Transform.t) ->
           String.equal ct.name name))
   in
+  let (`Linters linters, `Without_linters cts) = Transform.extract_linters cts in
   let cts =
     if !no_merge then
       List.map cts ~f:(Transform.merge_into_generic_mappers ~hook
@@ -244,7 +281,7 @@ let get_whole_ast_passes ~hook ~expect_mismatch_handler =
         :: cts
     end
   in
-  List.filter cts ~f:(fun (ct : Transform.t) ->
+  linters @ List.filter cts ~f:(fun (ct : Transform.t) ->
     match ct.impl, ct.intf with
     | None, None -> false
     | _          -> true)
@@ -263,23 +300,31 @@ let print_passes () =
             <builtin:check-unused-extensions>\n";
 ;;
 
-let apply_transforms ~field ~dropped_so_far ~hook ~expect_mismatch_handler x =
+let apply_transforms ~field ~lint_field ~dropped_so_far ~hook ~expect_mismatch_handler x =
   let cts = get_whole_ast_passes ~hook ~expect_mismatch_handler in
-  List.fold_left cts ~init:(x, []) ~f:(fun (x, dropped) (ct : Transform.t) ->
-    match field ct with
-    | None -> (x, dropped)
-    | Some f ->
-      let x = f x in
-      let dropped =
-        if !debug_attribute_drop then begin
-          let new_dropped = dropped_so_far x in
-          debug_dropped_attribute ct.name ~old_dropped:dropped ~new_dropped;
-          new_dropped
-        end else
-          []
+  let x, _dropped, lint_errors =
+  List.fold_left cts ~init:(x, [], [])
+    ~f:(fun (x, dropped, lint_errors) (ct : Transform.t) ->
+      let lint_errors =
+        match lint_field ct with
+        | None -> lint_errors
+        | Some f -> lint_errors @ f x
       in
-      (x, dropped))
-  |> fst
+      match field ct with
+      | None -> (x, dropped, lint_errors)
+      | Some f ->
+        let x = f x in
+        let dropped =
+          if !debug_attribute_drop then begin
+            let new_dropped = dropped_so_far x in
+            debug_dropped_attribute ct.name ~old_dropped:dropped ~new_dropped;
+            new_dropped
+          end else
+            []
+        in
+        (x, dropped, lint_errors))
+  in
+  (x, List.map lint_errors ~f:(fun (loc, s) -> attribute_of_warning loc s))
 ;;
 
 let map_structure_gen st ~hook ~expect_mismatch_handler =
@@ -290,9 +335,19 @@ let map_structure_gen st ~hook ~expect_mismatch_handler =
     end else
       st
   in
-  let st =
-    apply_transforms st ~field:(fun (ct : Transform.t) -> ct.impl)
+  let st, lint_errors =
+    apply_transforms st
+      ~field:(fun (ct : Transform.t) -> ct.impl)
+      ~lint_field:(fun (ct : Transform.t) -> ct.lint_impl)
       ~dropped_so_far:Attribute.dropped_so_far_structure ~hook ~expect_mismatch_handler
+  in
+  let st =
+    match lint_errors with
+    | [] -> st
+    | _  ->
+      List.map lint_errors ~f:(fun (({ loc; _ }, _) as attr) ->
+        Ast_builder.Default.pstr_attribute ~loc attr)
+      @ st
   in
   if !perform_checks then begin
     Attribute.check_unused#structure st;
@@ -314,9 +369,19 @@ let map_signature_gen sg ~hook ~expect_mismatch_handler =
     end else
       sg
   in
-  let sg =
-    apply_transforms sg ~field:(fun ct -> ct.intf)
+  let sg, lint_errors =
+    apply_transforms sg
+      ~field:(fun ct -> ct.intf)
+      ~lint_field:(fun (ct : Transform.t) -> ct.lint_intf)
       ~dropped_so_far:Attribute.dropped_so_far_signature ~hook ~expect_mismatch_handler
+  in
+  let sg =
+    match lint_errors with
+    | [] -> sg
+    | _  ->
+      List.map lint_errors ~f:(fun (({ loc; _ }, _) as attr) ->
+        Ast_builder.Default.psig_attribute ~loc attr)
+      @ sg
   in
   if !perform_checks then begin
     Attribute.check_unused#signature sg;

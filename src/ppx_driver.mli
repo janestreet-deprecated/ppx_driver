@@ -3,6 +3,13 @@ open Import
 (** Add one argument to the command line *)
 val add_arg : Caml.Arg.key -> Caml.Arg.spec -> doc:string -> unit
 
+(** Error reported by linters *)
+module Lint_error : sig
+  type t
+
+  val of_string : Location.t -> string -> t
+end
+
 (** [register_transformation name] registers a code transformation.
 
     [name] is a logical name for the transformation (such as [sexp_conv] or
@@ -41,6 +48,9 @@ val add_arg : Caml.Arg.key -> Caml.Arg.spec -> doc:string -> unit
     independent of the order in which the various rewriter are specified. Moreover the
     resulting driver will be faster as it will do only one pass (excluding safety checks)
     on the whole AST.
+
+    [lint_impl] and [lint_intf] are applied to the unprocessed source. Errors they return
+    will be reported to the user as preprocessor warnings.
 *)
 val register_transformation
   :  ?extensions   : Extension.t list (* deprecated, use ~rules instead *)
@@ -49,6 +59,8 @@ val register_transformation
   -> ?enclose_intf : (Location.t option -> signature * signature)
   -> ?impl         : (structure -> structure)
   -> ?intf         : (signature -> signature)
+  -> ?lint_impl    : (structure -> Lint_error.t list)
+  -> ?lint_intf    : (signature -> Lint_error.t list)
   -> string
   -> unit
 
