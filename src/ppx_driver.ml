@@ -651,7 +651,7 @@ let output_mode = ref Pretty_print
 let output = ref None
 let kind = ref None
 let input = ref None
-let embed_errors = ref None
+let embed_errors = ref false
 let set_input fn =
   match !input with
   | None -> input := Some fn
@@ -758,11 +758,19 @@ let shared_args =
 let () =
   List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
 
+let as_pp () =
+  set_output_mode Dump_ast;
+  embed_errors := true
+
 let standalone_args =
   [ "-as-ppx", Arg.Unit (fun () -> raise (Arg.Bad "-as-ppx must be the first argument")),
     " Run as a -ppx rewriter (must be the first argument)"
   ; "--as-ppx", Arg.Unit (fun () -> raise (Arg.Bad "--as-ppx must be the first argument")),
     " Same as -as-ppx"
+  ; "-as-pp", Arg.Unit as_pp,
+    " Shorthand for: -dump-ast -embed-errors"
+  ; "--as-pp", Arg.Unit as_pp,
+    " Same as -as-pp"
   ; "-o", Arg.String (fun s -> output := Some s),
     "<filename> Output file (use '-' for stdout)"
   ; "-", Arg.Unit (fun () -> set_input "-"),
@@ -775,7 +783,8 @@ let standalone_args =
     " Same as -dump-ast"
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
     " Print the parsetree (same as ocamlc -dparsetree)"
-  ; "-embed-errors", Arg.Bool (fun x -> embed_errors := Some x),
+  ;
+    "-embed-errors", Arg.Bool (fun b ->  embed_errors := b),
     " Embed errors in the output AST (default: true when -dump-ast, false otherwise)"
   ; "-null", Arg.Unit (fun () -> set_output_mode Null),
     " Produce no output, except for errors"
@@ -856,16 +865,8 @@ let standalone_main () =
       | None    -> fn
       | Some fn -> fn
     in
-    let embed_errors =
-      match !embed_errors with
-      | Some x -> x
-      | None ->
-        match !output_mode with
-        | Dump_ast -> true
-        | _        -> false
-    in
     process_file kind fn ~input_name ~output_mode:!output_mode ~output:!output
-      ~embed_errors
+      ~embed_errors:!embed_errors
 ;;
 
 let standalone_run_as_ppx_rewriter () =
