@@ -1,3 +1,4 @@
+(*$ #use "../../ppx_core/src/cinaps_helpers" $*)
 open Import
 
 module Arg = Caml.Arg
@@ -24,6 +25,25 @@ module Lint_error = struct
   type t = Location.t * string
 
   let of_string loc s = (loc, s)
+end
+
+module Cookies = struct
+  type t = Migrate_parsetree.Driver.cookies
+
+  let get t name pattern =
+    Option.map (Migrate_parsetree.Driver.get_cookie t name (module Ppx_ast.Selected_ast))
+      ~f:(fun e ->
+        let e = Ppx_ast.Selected_ast.of_ocaml Expression e in
+        Ast_pattern.parse pattern e.pexp_loc e Fn.id)
+
+  let handlers = ref []
+  let add_handler f = handlers := f :: !handlers
+
+  let add_simple_handler name pattern ~f =
+    add_handler (fun t -> f (get t name pattern))
+
+  let acknoledge_cookies t =
+    List.iter !handlers ~f:(fun f -> f t)
 end
 
 module Transform = struct
@@ -327,7 +347,43 @@ let apply_transforms ~field ~lint_field ~dropped_so_far ~hook ~expect_mismatch_h
   (x, List.map lint_errors ~f:(fun (loc, s) -> attribute_of_warning loc s))
 ;;
 
-let map_structure_gen st ~hook ~expect_mismatch_handler =
+(* +-----------------------------------------------------------------+
+   | Actual rewriting of structure/signatures                        |
+   +-----------------------------------------------------------------+ *)
+
+(* We want ppx_driver registered plugins to work with omp driver and vice-versa. To
+   simplify things we do as follow:
+
+   - we register ppx_driver as a single omp driver plugin
+   - ppx_driver calls the omp driver rewriting functions, which will apply everything
+
+   The registration with omp driver is at the end of the file.
+*)
+
+module C = struct
+  type t =
+    { hook                    : Context_free.Generated_code_hook.t
+    ; expect_mismatch_handler : Context_free.Expect_mismatch_handler.t
+    }
+
+  type Migrate_parsetree.Driver.extra += T of t
+
+  let default =
+    { hook                    = Context_free.Generated_code_hook.nop
+    ; expect_mismatch_handler = Context_free.Expect_mismatch_handler.nop
+    }
+
+  let find (config : Migrate_parsetree.Driver.config) =
+    List.find_map config.extras ~f:(function
+      | T config -> Some config
+      | _ -> None)
+    |> Option.value ~default
+end
+
+(*$*)
+let real_map_structure config cookies st =
+  let { C. hook; expect_mismatch_handler } = C.find config in
+  Cookies.acknoledge_cookies cookies;
   let st =
     if !perform_checks then begin
       Attribute.reset_checks ();
@@ -357,11 +413,28 @@ let map_structure_gen st ~hook ~expect_mismatch_handler =
   st
 ;;
 
+let map_structure_gen st ~hook ~expect_mismatch_handler
+  : Migrate_parsetree.Driver.some_structure =
+  let config =
+    Migrate_parsetree.Driver.make_config ()
+      ~tool_name:"ppx_driver"
+      ~extras:[C.T { hook
+                   ; expect_mismatch_handler
+                   }]
+  in
+  Migrate_parsetree.Driver.rewrite_structure
+    config
+    (module Ppx_ast.Selected_ast)
+    st
+
 let map_structure st =
   map_structure_gen st ~hook:Context_free.Generated_code_hook.nop
     ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
 
-let map_signature_gen sg ~hook ~expect_mismatch_handler =
+(*$ str_to_sig _last_text_block *)
+let real_map_signature config cookies sg =
+  let { C. hook; expect_mismatch_handler } = C.find config in
+  Cookies.acknoledge_cookies cookies;
   let sg =
     if !perform_checks then begin
       Attribute.reset_checks ();
@@ -371,7 +444,7 @@ let map_signature_gen sg ~hook ~expect_mismatch_handler =
   in
   let sg, lint_errors =
     apply_transforms sg
-      ~field:(fun ct -> ct.intf)
+      ~field:(fun (ct : Transform.t) -> ct.intf)
       ~lint_field:(fun (ct : Transform.t) -> ct.lint_intf)
       ~dropped_so_far:Attribute.dropped_so_far_signature ~hook ~expect_mismatch_handler
   in
@@ -391,14 +464,47 @@ let map_signature_gen sg ~hook ~expect_mismatch_handler =
   sg
 ;;
 
+let map_signature_gen sg ~hook ~expect_mismatch_handler
+  : Migrate_parsetree.Driver.some_signature =
+  let config =
+    Migrate_parsetree.Driver.make_config ()
+      ~tool_name:"ppx_driver"
+      ~extras:[C.T { hook
+                   ; expect_mismatch_handler
+                   }]
+  in
+  Migrate_parsetree.Driver.rewrite_signature
+    config
+    (module Ppx_ast.Selected_ast)
+    sg
+
 let map_signature sg =
   map_signature_gen sg ~hook:Context_free.Generated_code_hook.nop
     ~expect_mismatch_handler:Context_free.Expect_mismatch_handler.nop
 
+(*$*)
+
+(* +-----------------------------------------------------------------+
+   | Entry points                                                    |
+   +-----------------------------------------------------------------+ *)
+
 let mapper =
   let module Js = Ppx_ast.Selected_ast in
-  let structure _ st = Js.to_ocaml_mapper Structure map_structure st in
-  let signature _ sg = Js.to_ocaml_mapper Signature map_signature sg in
+  (*$*)
+  let structure _ st =
+    Js.of_ocaml Structure st
+    |> map_structure
+    |> Migrate_parsetree.Driver.migrate_some_structure
+         (module Migrate_parsetree.OCaml_current)
+  in
+  (*$ str_to_sig _last_text_block *)
+  let signature _ sg =
+    Js.of_ocaml Signature sg
+    |> map_signature
+    |> Migrate_parsetree.Driver.migrate_some_signature
+         (module Migrate_parsetree.OCaml_current)
+  in
+  (*$*)
   { Ocaml_common.Ast_mapper.default_mapper with structure; signature }
 ;;
 
@@ -546,6 +652,54 @@ type output_mode =
   | Reconcile of Reconcile.mode
   | Null
 
+(*$*)
+let extract_cookies_str st =
+  match st with
+  | { pstr_desc = Pstr_attribute({txt = "ocaml.ppx.context"; _}, _); _ } as prefix
+    :: st ->
+    let prefix = Ppx_ast.Selected_ast.to_ocaml Structure [prefix] in
+    assert (List.is_empty
+              (Ocaml_common.Ast_mapper.drop_ppx_context_str ~restore:true prefix));
+    st
+  | _ -> st
+
+let add_cookies_str st =
+  let prefix =
+    Ocaml_common.Ast_mapper.add_ppx_context_str ~tool_name:"ppx_driver" []
+    |> Ppx_ast.Selected_ast.of_ocaml Structure
+  in
+  prefix @ st
+
+(*$ str_to_sig _last_text_block *)
+let extract_cookies_sig sg =
+  match sg with
+  | { psig_desc = Psig_attribute({txt = "ocaml.ppx.context"; _}, _); _ } as prefix
+    :: sg ->
+    let prefix = Ppx_ast.Selected_ast.to_ocaml Signature [prefix] in
+    assert (List.is_empty
+              (Ocaml_common.Ast_mapper.drop_ppx_context_sig ~restore:true prefix));
+    sg
+  | _ -> sg
+
+let add_cookies_sig sg =
+  let prefix =
+    Ocaml_common.Ast_mapper.add_ppx_context_sig ~tool_name:"ppx_driver" []
+    |> Ppx_ast.Selected_ast.of_ocaml Signature
+  in
+  prefix @ sg
+
+(*$*)
+
+let extract_cookies (ast : Intf_or_impl.t) : Intf_or_impl.t =
+  match ast with
+  | Intf x -> Intf (extract_cookies_sig x)
+  | Impl x -> Impl (extract_cookies_str x)
+
+let add_cookies (ast : Intf_or_impl.t) : Intf_or_impl.t =
+  match ast with
+  | Intf x -> Intf (add_cookies_sig x)
+  | Impl x -> Impl (add_cookies_str x)
+
 let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~output =
     let replacements = ref [] in
     let expect_mismatches = ref [] in
@@ -576,9 +730,10 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
       }
     in
 
-    let ast : Intf_or_impl.t =
+    let ast : Some_intf_or_impl.t =
       try
         let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
+        let ast = extract_cookies ast in
         match ast with
         | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
         | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
@@ -590,14 +745,10 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
         let ext = Location.Error.to_extension error in
         let open Ast_builder.Default in
         match kind with
-        | Intf -> Intf [ psig_extension ~loc ext [] ]
-        | Impl -> Impl [ pstr_extension ~loc ext [] ]
-    in
-
-    let null_ast =
-      match ast with
-      | Intf [] | Impl [] -> true
-      | _ -> false
+        | Intf -> Intf (Sig ((module Ppx_ast.Selected_ast),
+                             [ psig_extension ~loc ext [] ]))
+        | Impl -> Impl (Str ((module Ppx_ast.Selected_ast),
+                             [ pstr_extension ~loc ext [] ]))
     in
 
     let input_contents = lazy (load_source_file fn) in
@@ -619,17 +770,25 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
      | Pretty_print ->
        with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in
+         let ast = Intf_or_impl.of_some_intf_or_impl ast in
          (match ast with
           | Intf ast -> Pprintast.signature ppf ast
           | Impl ast -> Pprintast.structure ppf ast);
+         let null_ast =
+           match ast with
+           | Intf [] | Impl [] -> true
+           | _ -> false
+         in
          if not null_ast then Caml.Format.pp_print_newline ppf ())
      | Dump_ast ->
        with_output output ~binary:true ~f:(fun oc ->
-         let ast = Intf_or_impl.to_ast_io ast in
+         let ast = Some_intf_or_impl.to_ast_io ast ~add_ppx_context:true in
          Migrate_parsetree.Ast_io.to_channel oc input_name ast)
      | Dparsetree ->
        with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in
+         let ast = Intf_or_impl.of_some_intf_or_impl ast in
+         let ast = add_cookies ast in
          (match ast with
           | Intf ast -> Sexp.pp_hum ppf (Ast_traverse.sexp_of#signature ast)
           | Impl ast -> Sexp.pp_hum ppf (Ast_traverse.sexp_of#structure ast));
@@ -758,6 +917,23 @@ let shared_args =
 let () =
   List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
 
+let set_cookie s =
+  match String.lsplit2 s ~on:'=' with
+  | None ->
+    raise (Arg.Bad "invalid cookie, must be of the form \"<name>=<expr>\"")
+  | Some (name, value) ->
+    let lexbuf = Lexing.from_string value in
+    lexbuf.Lexing.lex_curr_p <-
+      { Lexing.
+        pos_fname = "<command-line>"
+      ; pos_lnum  = 1
+      ; pos_bol   = 0
+      ; pos_cnum  = 0
+      };
+    let expr = Parse.expression lexbuf in
+    Ocaml_common.Ast_mapper.set_cookie name
+      (Ppx_ast.Selected_ast.to_ocaml Expression expr)
+
 let as_pp () =
   set_output_mode Dump_ast;
   embed_errors := true
@@ -820,6 +996,10 @@ let standalone_args =
     " Instruct code generators to improve the prettiness of the generated code"
   ; "-styler", Arg.String (fun s -> styler := Some s),
     " Code styler"
+  ; "-cookie", Arg.String set_cookie,
+    "NAME=EXPR Set the cookie NAME to EXPR"
+  ; "--cookie", Arg.String set_cookie,
+    " Same as -cookie"
   ]
 ;;
 
@@ -918,14 +1098,6 @@ let standalone () =
 let pretty () = !pretty
 
 let () =
-  (* Register ppx_driver as a single Migrate_driver rewriter so that ppx_driver based
-     rewriters can be used with ocaml-migrate-parsetree.driver-main *)
-  let mapper =
-    let module A = Ppx_ast.Selected_ast.Ast.Ast_mapper in
-    let structure _ st = map_structure st in
-    let signature _ sg = map_signature sg in
-    { A.default_mapper with structure; signature }
-  in
   Migrate_parsetree.Driver.register
     ~name:"ppx_driver"
     (* This doesn't take arguments registered by rewriters. It's not worth supporting
@@ -933,4 +1105,8 @@ let () =
        individual rewriters. *)
     ~args:shared_args
     (module Ppx_ast.Selected_ast)
-    (fun _config _cookie -> mapper)
+    (fun config cookies ->
+       let module A = Ppx_ast.Selected_ast.Ast.Ast_mapper in
+       let structure _ st = real_map_structure config cookies st in
+       let signature _ sg = real_map_signature config cookies sg in
+       { A.default_mapper with structure; signature })

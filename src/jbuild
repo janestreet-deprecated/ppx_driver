@@ -9,4 +9,11 @@
   (preprocess no_preprocessing)
   ))
 
+(alias
+ ((name DEFAULT)
+  (deps (../../ppx_core/src/cinaps_helpers
+         (glob_files *.ml)
+         (glob_files *.mli)))
+  (action (bash "${bin:cinaps} *.ml *.mli"))))
+
 (jbuild_version 1)

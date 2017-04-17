@@ -26,6 +26,42 @@ module Kind = struct
   let equal : t -> t -> bool = Polymorphic_compare.equal
 end
 
+module Some_intf_or_impl = struct
+  type t =
+    | Intf of Migrate_parsetree.Driver.some_signature
+    | Impl of Migrate_parsetree.Driver.some_structure
+
+  let to_ast_io (ast : t) ~add_ppx_context =
+    let open Migrate_parsetree in
+    match ast with
+    | Intf (Migrate_parsetree.Driver.Sig ((module Ver), sg)) ->
+      let sg =
+        (Migrate_parsetree.Versions.migrate
+           (module Ver)
+           (module Versions.OCaml_current)).copy_signature sg
+      in
+      let sg =
+        if add_ppx_context then
+          Ocaml_common.Ast_mapper.add_ppx_context_sig ~tool_name:"ppx_driver" sg
+        else
+          sg
+      in
+      Ast_io.Intf ((module Versions.OCaml_current), sg)
+    | Impl (Migrate_parsetree.Driver.Str ((module Ver), st)) ->
+      let st =
+        (Migrate_parsetree.Versions.migrate
+                      (module Ver)
+                      (module Versions.OCaml_current)).copy_structure st
+      in
+      let st =
+        if add_ppx_context then
+          Ocaml_common.Ast_mapper.add_ppx_context_str ~tool_name:"ppx_driver" st
+        else
+          st
+      in
+      Ast_io.Impl ((module Versions.OCaml_current), st)
+end
+
 module Intf_or_impl = struct
   type t =
     | Intf of signature
@@ -47,6 +83,16 @@ module Intf_or_impl = struct
     | Intf _ -> Intf
     | Impl _ -> Impl
 
+  let of_some_intf_or_impl ast : t =
+    let open Some_intf_or_impl in
+    match ast with
+    | Intf (Migrate_parsetree.Driver.Sig ((module Ver), sg)) ->
+      Intf ((Migrate_parsetree.Versions.migrate (module Ver)
+               (module Ppx_ast.Selected_ast)).copy_signature sg)
+    | Impl (Migrate_parsetree.Driver.Str ((module Ver), st)) ->
+      Impl ((Migrate_parsetree.Versions.migrate (module Ver)
+               (module Ppx_ast.Selected_ast)).copy_structure st)
+
   let of_ast_io ast : t =
     let open Migrate_parsetree in
     match ast with
@@ -56,16 +102,6 @@ module Intf_or_impl = struct
     | Ast_io.Impl ((module Ver), st) ->
       let module C = Versions.Convert(Ver)(Ppx_ast.Selected_ast) in
       Impl (C.copy_structure st)
-
-  let to_ast_io (ast : t) =
-    let open Migrate_parsetree in
-    match ast with
-    | Intf sg ->
-      Ast_io.Intf ((module Versions.OCaml_current),
-                   Ppx_ast.Selected_ast.to_ocaml Signature sg)
-    | Impl st ->
-      Ast_io.Impl ((module Versions.OCaml_current),
-                   Ppx_ast.Selected_ast.to_ocaml Structure st)
 end
 (*
 let map_impl x ~(f : _ Intf_or_impl.t -> _ Intf_or_impl.t) =
