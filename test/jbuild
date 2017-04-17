@@ -14,7 +14,7 @@
 (rule
  ((deps    (../../ppx_jane/bin/main.exe example.ml))
   (targets (example.ml.pp))
-  (action  (bash "${^} -inline-test-lib foo -reconcile \
+  (action  (bash "${^} -cookie library-name='\"foo\"' -reconcile \
             -dirname blah -loc-filename example.ml -o ${@}"))))
 
 

@@ -10,6 +10,28 @@ module Lint_error : sig
   val of_string : Location.t -> string -> t
 end
 
+module Cookies : sig
+  type t
+
+  (** [get cookies name pattern] look for a cookie named [name] and parse it using
+      [pattern]. *)
+  val get : t -> string -> (expression, 'a -> 'a, 'b) Ast_pattern.t -> 'b option
+
+  (** Register a callback that is called before a rewriting. The handler is expected to
+      lookup some cookies and set some environment variables.
+
+      This API is a temporary hack to allow to migrate from [add_arg] to the use of
+      cookie, until the ppx_driver/ppx_core has been upgraded to pass cookies through. *)
+  val add_handler : (t -> unit) -> unit
+
+  (** Shorthand for: [add_handler (fun t -> f (get t name pattern))] *)
+  val add_simple_handler
+    :  string
+    -> (expression, 'a -> 'a, 'b) Ast_pattern.t
+    -> f:('b option -> unit)
+    -> unit
+end
+
 (** [register_transformation name] registers a code transformation.
 
     [name] is a logical name for the transformation (such as [sexp_conv] or
@@ -109,4 +131,4 @@ val run_as_ppx_rewriter : unit -> unit
 val pretty : unit -> bool
 
 (**/**)
-val map_structure : structure -> structure
+val map_structure : structure -> Migrate_parsetree.Driver.some_structure
