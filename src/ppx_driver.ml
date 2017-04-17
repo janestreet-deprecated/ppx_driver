@@ -960,7 +960,7 @@ let standalone_args =
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
     " Print the parsetree (same as ocamlc -dparsetree)"
   ;
-    "-embed-errors", Arg.Bool (fun b ->  embed_errors := b),
+    "-embed-errors", Arg.Set embed_errors,
     " Embed errors in the output AST (default: true when -dump-ast, false otherwise)"
   ; "-null", Arg.Unit (fun () -> set_output_mode Null),
     " Produce no output, except for errors"
