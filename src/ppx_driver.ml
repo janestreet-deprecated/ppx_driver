@@ -33,7 +33,6 @@ module Cookies = struct
   let get t name pattern =
     Option.map (Migrate_parsetree.Driver.get_cookie t name (module Ppx_ast.Selected_ast))
       ~f:(fun e ->
-        let e = Ppx_ast.Selected_ast.of_ocaml Expression e in
         Ast_pattern.parse pattern e.pexp_loc e Fn.id)
 
   let handlers = ref []
