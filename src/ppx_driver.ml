@@ -631,6 +631,7 @@ let load_input (kind : Kind.t) fn input_name ic =
       ; pos_bol   = 0
       ; pos_cnum  = 0
       };
+    Lexer.skip_sharp_bang lexbuf;
     match kind with
     | Intf -> Intf (Parse.interface      lexbuf)
     | Impl -> Impl (Parse.implementation lexbuf)
@@ -958,8 +959,7 @@ let standalone_args =
     " Same as -dump-ast"
   ; "-dparsetree", Arg.Unit (fun () -> set_output_mode Dparsetree),
     " Print the parsetree (same as ocamlc -dparsetree)"
-  ;
-    "-embed-errors", Arg.Bool (fun b ->  embed_errors := b),
+  ; "-embed-errors", Arg.Set embed_errors,
     " Embed errors in the output AST (default: true when -dump-ast, false otherwise)"
   ; "-null", Arg.Unit (fun () -> set_output_mode Null),
     " Produce no output, except for errors"

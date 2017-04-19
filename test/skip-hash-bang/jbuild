@@ -1,0 +1,5 @@
+(library
+ ((name ppx_driver_test_skip_hash_bang)
+  (preprocess (pps ( ppx_driver.runner)))))
+
+(jbuild_version 1)
