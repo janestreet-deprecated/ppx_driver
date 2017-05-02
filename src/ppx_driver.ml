@@ -9,7 +9,8 @@ let args = ref []
 
 let add_arg key spec ~doc = args := (key, spec, doc) :: !args
 
-let perform_checks = ref true
+let perform_checks = ref Options.perform_checks
+let perform_checks_on_extensions = ref Options.perform_checks_on_extensions
 let debug_attribute_drop = ref false
 let apply_list = ref None
 let preprocessor = ref None
@@ -17,7 +18,7 @@ let no_merge = ref false
 let request_print_passes = ref false
 let request_print_transformations = ref false
 let use_color = ref true
-let diff_command = ref None
+let diff_command = ref Options.diff_command
 let pretty = ref false
 let styler = ref None
 
@@ -315,8 +316,11 @@ let print_passes () =
     printf "<builtin:freshen-and-collect-attributes>\n";
   List.iter cts ~f:(fun ct -> printf "%s\n" ct.Transform.name);
   if !perform_checks then
-    printf "<builtin:check-unused-attributes>\n\
-            <builtin:check-unused-extensions>\n";
+    begin
+      printf "<builtin:check-unused-attributes>\n";
+      if !perform_checks_on_extensions
+      then printf "<builtin:check-unused-extensions>\n"
+    end
 ;;
 
 let apply_transforms ~field ~lint_field ~dropped_so_far ~hook ~expect_mismatch_handler x =
@@ -406,7 +410,7 @@ let real_map_structure config cookies st =
   in
   if !perform_checks then begin
     Attribute.check_unused#structure st;
-    Extension.check_unused#structure st;
+    if !perform_checks_on_extensions then Extension.check_unused#structure st;
     Attribute.check_all_seen ();
   end;
   st
@@ -457,7 +461,7 @@ let real_map_signature config cookies sg =
   in
   if !perform_checks then begin
     Attribute.check_unused#signature sg;
-    Extension.check_unused#signature sg;
+    if !perform_checks_on_extensions then Extension.check_unused#signature sg;
     Attribute.check_all_seen ();
   end;
   sg
@@ -906,6 +910,8 @@ let shared_args =
     "<string> Mark the given namespace as reserved"
   ; "-no-check", Arg.Clear perform_checks,
     " Disable checks (unsafe)"
+  ; "-no-check-on-extensions", Arg.Clear perform_checks_on_extensions,
+    " Disable checks on extension point only"
   ; "-apply", Arg.String handle_apply,
     "<names> Apply these transformations in order (comma-separated list)"
   ; "-dont-apply", Arg.String handle_dont_apply,
