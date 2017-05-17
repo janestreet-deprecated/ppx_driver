@@ -33,5 +33,5 @@ Ppx_driver.register_transformation "blah"
 
 [%%expect{|
 Line _, characters 2-5:
-Extension `bar' was not translated
+Error: Extension `bar' was not translated
 |}]

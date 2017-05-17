@@ -635,7 +635,7 @@ let load_input (kind : Kind.t) fn input_name ic =
       ; pos_bol   = 0
       ; pos_cnum  = 0
       };
-    Lexer.skip_sharp_bang lexbuf;
+    Lexer.skip_hash_bang lexbuf;
     match kind with
     | Intf -> Intf (Parse.interface      lexbuf)
     | Impl -> Impl (Parse.implementation lexbuf)

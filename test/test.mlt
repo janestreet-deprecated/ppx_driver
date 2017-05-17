@@ -6,13 +6,13 @@ open Ppx_core
 let x = 1 [@@foo]
 [%%expect{|
 Line _, characters 13-16:
-Attribute `foo' was not used
+Error: Attribute `foo' was not used
 |}];;
 
 let f x = 1 [@@deprecatd "..."]
 [%%expect{|
 Line _, characters 15-24:
-Attribute `deprecatd' was not used.
+Error: Attribute `deprecatd' was not used.
 Hint: Did you mean deprecated?
 |}];;
 
@@ -25,7 +25,7 @@ let attr : _ Attribute.t =
 type t = int [@blah]
 [%%expect{|
 Line _, characters 15-19:
-Attribute `blah' was not used.
+Error: Attribute `blah' was not used.
 Hint: `blah' is available for type declarations but is used here in the
 context of a core type.
 Did you put it at the wrong level?
@@ -40,7 +40,7 @@ let attr : _ Attribute.t =
 type t = int [@blah]
 [%%expect{|
 Line _, characters 15-19:
-Attribute `blah' was not used.
+Error: Attribute `blah' was not used.
 Hint: `blah' is available for expressions and type declarations but is used
 here in the context of a core type.
 Did you put it at the wrong level?
@@ -63,7 +63,7 @@ let () =
 let x = (42 [@foo])
 [%%expect{|
 Line _, characters 14-17:
-Attribute `foo' was silently dropped
+Error: Attribute `foo' was silently dropped
 |}];;
 
 (* Linters *)

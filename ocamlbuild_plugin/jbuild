@@ -1,5 +1,5 @@
 (library
- ((name ppx_driver_ocamlbuild)
+ (  (name ppx_driver_ocamlbuild)
   (public_name ppx_driver.ocamlbuild)
   (libraries (ocamlbuild))
   (flags (:standard -I +ocamlbuild))
