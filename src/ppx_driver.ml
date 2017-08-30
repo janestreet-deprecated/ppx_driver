@@ -756,7 +756,7 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
     in
 
     let input_contents = lazy (load_source_file fn) in
-    let corrected = fn ^ ".corrected" in
+    let corrected = fn ^ ".ppx-corrected" in
     let mismatches_found =
       match !expect_mismatches with
       | [] ->
