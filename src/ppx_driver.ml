@@ -626,7 +626,7 @@ let load_input (kind : Kind.t) fn input_name ic =
        it with what we read to do the test. *)
     let lexbuf = Lexing.from_channel ic in
     let len = String.length prefix_read_from_file in
-    String.blit ~src:prefix_read_from_file ~src_pos:0 ~dst:lexbuf.lex_buffer ~dst_pos:0
+    Bytes.From_string.blit ~src:prefix_read_from_file ~src_pos:0 ~dst:lexbuf.lex_buffer ~dst_pos:0
       ~len;
     lexbuf.lex_buffer_len <- len;
     lexbuf.lex_curr_p <-

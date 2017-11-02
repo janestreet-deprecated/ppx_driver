@@ -202,7 +202,7 @@ let reconcile ?styler (repls : Replacements.t) ~kind ~contents ~input_filename
            Out_channel.fprintf oc "# %d %S\n%*s" pos.pos_lnum input_name
              (pos.pos_cnum - pos.pos_bol) ""
          | Output Delimiting_generated_blocks | Corrected -> ());
-        Out_channel.output oc ~buf:contents ~pos:pos.pos_cnum ~len:(up_to - pos.pos_cnum);
+        Out_channel.output_substring oc ~buf:contents ~pos:pos.pos_cnum ~len:(up_to - pos.pos_cnum);
         let line = ref (line + 1) in
         for i = pos.pos_cnum to up_to - 1 do
           if Char.equal contents.[i] '\n' then line := !line + 1

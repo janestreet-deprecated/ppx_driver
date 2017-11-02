@@ -1,6 +1,7 @@
 (library
  ((name ppx_driver)
   (public_name ppx_driver)
+  (flags (:standard -safe-string))
   (libraries (compiler-libs.common
               ppx_core
               ppx_optcomp

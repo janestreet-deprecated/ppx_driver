@@ -1,5 +1,6 @@
 (library
  ((name ppx_driver_omp_test_ppx)
+  (flags (:standard -safe-string))
   (libraries (ocaml-migrate-parsetree))
   (preprocess no_preprocessing)))
 
