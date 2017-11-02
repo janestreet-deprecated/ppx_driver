@@ -9,7 +9,7 @@ let args = ref []
 
 let add_arg key spec ~doc = args := (key, spec, doc) :: !args
 
-let perform_checks = ref true
+let perform_checks = ref false
 let debug_attribute_drop = ref false
 let apply_list = ref None
 let preprocessor = ref None
@@ -738,8 +738,8 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
         | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
       with exn when embed_errors ->
       match Location.Error.of_exn exn with
-      | None -> raise exn
-      | Some error ->
+      | None | Some `Already_displayed -> raise exn
+      | Some (`Ok error) ->
         let loc = Location.none in
         let ext = Location.Error.to_extension error in
         let open Ast_builder.Default in
@@ -905,6 +905,8 @@ let shared_args =
     "<string> Mark the given namespace as reserved"
   ; "-no-check", Arg.Clear perform_checks,
     " Disable checks (unsafe)"
+  ; "-do-check", Arg.Set perform_checks,
+    " Enable checks"
   ; "-apply", Arg.String handle_apply,
     "<names> Apply these transformations in order (comma-separated list)"
   ; "-dont-apply", Arg.String handle_dont_apply,
