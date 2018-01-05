@@ -6,9 +6,9 @@ let () = Ppx_inline_test_lib.Runtime.set_lib_and_partition "foo" ""
 type t = int [@@deriving sexp]
 # 8 "example.ml.pp"
 let _ = fun (_ : t)  -> ()
-let t_of_sexp : Sexplib.Sexp.t -> t = int_of_sexp
+let t_of_sexp : Ppx_sexp_conv_lib.Sexp.t -> t = int_of_sexp
 let _ = t_of_sexp
-let sexp_of_t : t -> Sexplib.Sexp.t = sexp_of_int
+let sexp_of_t : t -> Ppx_sexp_conv_lib.Sexp.t = sexp_of_int
 let _ = sexp_of_t
 # 3 "example.ml"
 let f x = x + 1
@@ -28,11 +28,12 @@ let () =
 let () = ()
 let () = print_s 
 # 31 "example.ml.pp"
-(Sexplib.Sexp.List
-   [Sexplib.Sexp.List [Sexplib.Sexp.Atom "x"; Sexplib.Conv.sexp_of_int 1]])
+(Ppx_sexp_conv_lib.Sexp.List
+   [Ppx_sexp_conv_lib.Sexp.List
+      [Ppx_sexp_conv_lib.Sexp.Atom "x"; Ppx_sexp_conv_lib.Conv.sexp_of_int 1]])
 # 9 "example.ml"
                                   ; ()
-# 36 "example.ml.pp"
+# 37 "example.ml.pp"
 let () = Ppx_inline_test_lib.Runtime.unset_lib "foo"
 let () = Expect_test_collector.Current_file.unset ()
 let () = Ppx_bench_lib.Benchmark_accumulator.Current_libname.unset ()
