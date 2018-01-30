@@ -17,29 +17,15 @@ let print ?diff_command ?(use_color=false) ~file1 ~file2 () =
       Printf.sprintf "%s %s %s 1>&2" cmd (Filename.quote file1) (Filename.quote file2)
     in
     match Sys.command cmd with
-    | 0 -> `Same
-    | 1 -> `Different
-    | n -> `Error (n, cmd)
+    | 0 -> true
+    | 1 -> false
+    | n -> Printf.eprintf "%S exited with code %d\n" cmd n; exit 2
   in
   match diff_command with
-  | Some s -> ignore (exec s : [> `Same | `Different | `Error of int * string])
+  | Some s -> ignore (exec s : bool)
   | None ->
-    begin match exec (patdiff_cmd ~use_color) with
-    | `Same ->
-      (* patdiff produced no output, fallback to diff -u *)
+    if exec (patdiff_cmd ~use_color) then (
       Printf.eprintf "File \"%s\", line 1, characters 0-0:\n%!" file1;
-      ignore (exec "diff -u" : [> `Same | `Different | `Error of int * string])
-    | `Different ->
-      (* patdiff successfully found a difference *)
-      ()
-    | `Error (err_code, cmd) ->
-      (* patdiff threw an error... perhaps it wasn't installed? fallback to diff -u *)
-      Printf.eprintf "Error:\n\
-                      > %S exited with code %d\n\
-                      > Perhaps patdiff is not installed? Hint, try: opam install patdiff\n\
-                      > Falling back to diff -u\n\
-                      \n" cmd err_code;
-      Printf.eprintf "File \"%s\", line 1, characters 0-0:\n%!" file1;
-      ignore (exec "diff -u" : [> `Same | `Different | `Error of int * string])
-    end
+      ignore (exec "diff -u" : bool);
+    )
 ;;
