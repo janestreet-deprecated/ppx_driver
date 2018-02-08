@@ -88,7 +88,6 @@ ppx.exe [extra_args] [<files>]
   --as-pp                     Same as -as-pp
   -o <filename>               Output file (use '-' for stdout)
   -                           Read input from stdin
-  -no-optcomp                 Do not use optcomp (default if the input or output of -pp is a binary AST)
   -dump-ast                   Dump the marshaled ast to the output file instead of pretty-printing it
   --dump-ast                  Same as -dump-ast
   -dparsetree                 Print the parsetree (same as ocamlc -dparsetree)
@@ -126,9 +125,6 @@ OCaml compiler, or as the argument of the `-ppx` option by passing
 $ ocamlc -c -pp "ppx -as-pp" file.ml
 $ ocamlc -c -ppx "ppx -as-ppx" file.ml
 ```
-
-When used with `-pp`, the driver will also interpret `#`-directives
-using [ppx_optcomp](http://github.com/janestreet/ppx_optcomp).
 
 ## ppx_driver rewriters as findlib libraries
 

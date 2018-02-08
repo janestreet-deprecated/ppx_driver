@@ -17,8 +17,11 @@ module Cookies : sig
       [pattern]. *)
   val get : t -> string -> (expression, 'a -> 'a, 'b) Ast_pattern.t -> 'b option
 
+  (** [set cookies name expr] set cookie [name] to [expr]. *)
+  val set : t -> string -> expression -> unit
+
   (** Register a callback that is called before a rewriting. The handler is expected to
-      lookup some cookies and set some environment variables.
+      lookup some cookies and set some global variables.
 
       This API is a temporary hack to allow to migrate from [add_arg] to the use of
       cookie, until the ppx_driver/ppx_core has been upgraded to pass cookies through. *)
@@ -30,6 +33,10 @@ module Cookies : sig
     -> (expression, 'a -> 'a, 'b) Ast_pattern.t
     -> f:('b option -> unit)
     -> unit
+
+  (** Register a callback that is called after a rewriting. The handler is expected to set
+      some cookies from some global variables. *)
+  val add_post_handler : (t -> unit) -> unit
 end
 
 (** [register_transformation name] registers a code transformation.
@@ -73,16 +80,21 @@ end
 
     [lint_impl] and [lint_intf] are applied to the unprocessed source. Errors they return
     will be reported to the user as preprocessor warnings.
+
+    [preprocess_impl] and [preprocess_intf] are applied after linters,
+    but before other transformations.
 *)
 val register_transformation
-  :  ?extensions   : Extension.t list (* deprecated, use ~rules instead *)
-  -> ?rules        : Context_free.Rule.t list
-  -> ?enclose_impl : (Location.t option -> structure * structure)
-  -> ?enclose_intf : (Location.t option -> signature * signature)
-  -> ?impl         : (structure -> structure)
-  -> ?intf         : (signature -> signature)
-  -> ?lint_impl    : (structure -> Lint_error.t list)
-  -> ?lint_intf    : (signature -> Lint_error.t list)
+  :  ?extensions       : Extension.t list (* deprecated, use ~rules instead *)
+  -> ?rules            : Context_free.Rule.t list
+  -> ?enclose_impl     : (Location.t option -> structure * structure)
+  -> ?enclose_intf     : (Location.t option -> signature * signature)
+  -> ?impl             : (structure -> structure)
+  -> ?intf             : (signature -> signature)
+  -> ?lint_impl        : (structure -> Lint_error.t list)
+  -> ?lint_intf        : (signature -> Lint_error.t list)
+  -> ?preprocess_impl  : (structure -> structure)
+  -> ?preprocess_intf  : (signature -> signature)
   -> string
   -> unit
 
@@ -117,6 +129,15 @@ val register_code_transformation
   -> intf:(signature -> signature)
   -> unit
   [@@deprecated "[since 2015-11] use register_transformation instead"]
+
+(** Rewriters might call this function to suggest a correction to the code source. When
+    they do this, the driver will generate a [file.ml.ppx-corrected] file with the
+    suggested replacement. The build system will then show the diff to the user who is
+    free to accept the correction or not. *)
+val register_correction : loc:Location.t -> repl:string -> unit
+
+(** Hook called before processing a file *)
+val register_process_file_hook : (unit -> unit) -> unit
 
 (** Suitable for -pp and also usable as a standalone command line tool.
 

@@ -12,6 +12,12 @@
   diffing itself, and by default also replaces the source file by the
   correction.'
 
+- `ppx_optcomp` is not linked by default anymore, people who want to keep using
+  it will need to explicitely depend on `ppx_optcomp_old`.
+
+- rewriters can now register corrections using the `register_correction`
+  function.
+
 ## 113.43.00
 
 - Update for the new context free API

@@ -10,7 +10,6 @@ build: [
 ]
 depends: [
   "ppx_core"
-  "ppx_optcomp"
   "jbuilder"                {build & >= "1.0+beta12"}
   "ocaml-migrate-parsetree" {>= "0.4"}
 ]

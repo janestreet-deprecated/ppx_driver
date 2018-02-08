@@ -36,27 +36,38 @@ module Cookies = struct
       ~f:(fun e ->
         Ast_pattern.parse pattern e.pexp_loc e Fn.id)
 
+  let set t name expr =
+    Migrate_parsetree.Driver.set_cookie t name (module Ppx_ast.Selected_ast) expr
+
   let handlers = ref []
-  let add_handler f = handlers := f :: !handlers
+  let add_handler f = handlers := !handlers @ [f]
 
   let add_simple_handler name pattern ~f =
     add_handler (fun t -> f (get t name pattern))
 
   let acknoledge_cookies t =
     List.iter !handlers ~f:(fun f -> f t)
+
+  let post_handlers = ref []
+  let add_post_handler f = post_handlers := !post_handlers @ [f]
+
+  let call_post_handlers t =
+    List.iter !post_handlers ~f:(fun f -> f t)
 end
 
 module Transform = struct
   type t =
-    { name          : string
-    ; impl          : (Parsetree.structure -> Parsetree.structure) option
-    ; intf          : (Parsetree.signature -> Parsetree.signature) option
-    ; lint_impl     : (Parsetree.structure -> Lint_error.t list) option
-    ; lint_intf     : (Parsetree.signature -> Lint_error.t list) option
-    ; enclose_impl  : (Location.t option -> Parsetree.structure * Parsetree.structure) option
-    ; enclose_intf  : (Location.t option -> Parsetree.signature * Parsetree.signature) option
-    ; rules         : Context_free.Rule.t list
-    ; registered_at : Caller_id.t
+    { name            : string
+    ; impl            : (Parsetree.structure -> Parsetree.structure) option
+    ; intf            : (Parsetree.signature -> Parsetree.signature) option
+    ; lint_impl       : (Parsetree.structure -> Lint_error.t list) option
+    ; lint_intf       : (Parsetree.signature -> Lint_error.t list) option
+    ; preprocess_impl : (Parsetree.structure -> Parsetree.structure) option
+    ; preprocess_intf : (Parsetree.signature -> Parsetree.signature) option
+    ; enclose_impl    : (Location.t option -> Parsetree.structure * Parsetree.structure) option
+    ; enclose_intf    : (Location.t option -> Parsetree.signature * Parsetree.signature) option
+    ; rules           : Context_free.Rule.t list
+    ; registered_at   : Caller_id.t
     }
 
   let all : t list ref = ref []
@@ -68,7 +79,7 @@ module Transform = struct
   ;;
 
   let register ?(extensions=[]) ?(rules=[]) ?enclose_impl ?enclose_intf
-        ?impl ?intf ?lint_impl ?lint_intf name =
+        ?impl ?intf ?lint_impl ?lint_intf ?preprocess_impl ?preprocess_intf name =
     let rules =
       List.map extensions ~f:Context_free.Rule.extension @ rules
     in
@@ -88,6 +99,8 @@ module Transform = struct
       ; impl
       ; intf
       ; lint_impl
+      ; preprocess_impl
+      ; preprocess_intf
       ; lint_intf
       ; registered_at = caller_id
       }
@@ -184,18 +197,20 @@ module Transform = struct
 
   let builtin_of_context_free_rewriters ~hook ~rules ~enclose_impl ~enclose_intf =
     merge_into_generic_mappers ~hook
-      { name = "<bultin:context-free>"
+      { name = "<builtin:context-free>"
       ; impl = None
       ; intf = None
       ; lint_impl = None
       ; lint_intf = None
+      ; preprocess_impl = None
+      ; preprocess_intf = None
       ; enclose_impl
       ; enclose_intf
       ; rules
       ; registered_at = Caller_id.get ~skip:[]
       }
 
-  let extract_linters ts =
+  let partition_transformations ts =
     (`Linters
        (List.filter_map ts ~f:(fun t ->
           if Option.is_some t.lint_impl || Option.is_some t.lint_intf then
@@ -207,16 +222,39 @@ module Transform = struct
               ; lint_intf = t.lint_intf
               ; enclose_impl = None
               ; enclose_intf = None
+              ; preprocess_impl = None
+              ; preprocess_intf = None
               ; rules = []
               ; registered_at = t.registered_at
               }
           else
             None)),
-     `Without_linters
+     `Preprocess
+       (List.filter_map ts ~f:(fun t ->
+          if Option.is_some t.preprocess_impl || Option.is_some t.preprocess_impl
+          then
+            Some
+              { name = Printf.sprintf "<preprocess:%s>" t.name
+              ; impl = t.preprocess_impl
+              ; intf = t.preprocess_intf
+              ; lint_impl = None
+              ; lint_intf = None
+              ; enclose_impl = None
+              ; enclose_intf = None
+              ; preprocess_impl = None
+              ; preprocess_intf = None
+              ; rules = []
+              ; registered_at = t.registered_at
+              }
+          else
+            None)),
+     `Rest
        (List.map ts ~f:(fun t ->
           { t with
             lint_impl = None
           ; lint_intf = None
+          ; preprocess_impl = None
+          ; preprocess_intf = None
           })))
 end
 
@@ -258,7 +296,14 @@ let get_whole_ast_passes ~hook ~expect_mismatch_handler =
         List.find_exn !Transform.all ~f:(fun (ct : Transform.t) ->
           String.equal ct.name name))
   in
-  let (`Linters linters, `Without_linters cts) = Transform.extract_linters cts in
+  let (`Linters linters, `Preprocess preprocess, `Rest cts) =
+    Transform.partition_transformations cts in
+  (* Allow only one preprocessor to assure deterministic order *)
+  if (List.length preprocess) > 1 then begin
+    let pp = String.concat ~sep:", " (List.map preprocess ~f:(fun t -> t.name)) in
+    let err = Printf.sprintf "At most one preprocessor is allowed, while got: %s" pp in
+    failwith err
+  end;
   let cts =
     if !no_merge then
       List.map cts ~f:(Transform.merge_into_generic_mappers ~hook
@@ -300,8 +345,7 @@ let get_whole_ast_passes ~hook ~expect_mismatch_handler =
           ~enclose_intf:(merge_encloser intf_enclosers)
         :: cts
     end
-  in
-  linters @ List.filter cts ~f:(fun (ct : Transform.t) ->
+  in linters @ preprocess @ List.filter cts ~f:(fun (ct : Transform.t) ->
     match ct.impl, ct.intf with
     | None, None -> false
     | _          -> true)
@@ -408,6 +452,7 @@ let real_map_structure config cookies st =
         Ast_builder.Default.pstr_attribute ~loc attr)
       @ st
   in
+  Cookies.call_post_handlers cookies;
   if !perform_checks then begin
     Attribute.check_unused#structure st;
     if !perform_checks_on_extensions then Extension.check_unused#structure st;
@@ -459,6 +504,7 @@ let real_map_signature config cookies sg =
         Ast_builder.Default.psig_attribute ~loc attr)
       @ sg
   in
+  Cookies.call_post_handlers cookies;
   if !perform_checks then begin
     Attribute.check_unused#signature sg;
     if !perform_checks_on_extensions then Extension.check_unused#signature sg;
@@ -704,49 +750,64 @@ let add_cookies (ast : Intf_or_impl.t) : Intf_or_impl.t =
   | Intf x -> Intf (add_cookies_sig x)
   | Impl x -> Impl (add_cookies_str x)
 
+let corrections = ref []
+
+let add_to_list r x = r := x :: !r
+
+let register_correction ~loc ~repl =
+  add_to_list corrections
+    (Reconcile.Replacement.make_text ()
+       ~start:loc.loc_start
+       ~stop:loc.loc_end
+       ~repl)
+
+let process_file_hooks = ref []
+
+let register_process_file_hook f =
+  add_to_list process_file_hooks f
+
 let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~output =
-    let replacements = ref [] in
-    let expect_mismatches = ref [] in
-    let add_to_list r x = r := x :: !r in
-    let hook : Context_free.Generated_code_hook.t =
-      match output_mode with
-      | Reconcile (Using_line_directives | Delimiting_generated_blocks) ->
-        { f = fun context (loc : Location.t) generated ->
-            add_to_list replacements
-              (Reconcile.Replacement.make ()
-                 ~context:(Extension context)
-                 ~start:loc.loc_start
-                 ~stop:loc.loc_end
-                 ~repl:generated)
-        }
-      | _ ->
-        Context_free.Generated_code_hook.nop
-    in
-    let expect_mismatch_handler : Context_free.Expect_mismatch_handler.t =
+  List.iter (List.rev !process_file_hooks) ~f:(fun f -> f ());
+  corrections := [];
+  let replacements = ref [] in
+  let hook : Context_free.Generated_code_hook.t =
+    match output_mode with
+    | Reconcile (Using_line_directives | Delimiting_generated_blocks) ->
       { f = fun context (loc : Location.t) generated ->
-          add_to_list expect_mismatches
+          add_to_list replacements
             (Reconcile.Replacement.make ()
-               ~context:(Floating_attribute context)
+               ~context:(Extension context)
                ~start:loc.loc_start
                ~stop:loc.loc_end
-               ~repl:(Many generated)
-               ~is_expectation:true)
+               ~repl:generated)
       }
-    in
+    | _ ->
+      Context_free.Generated_code_hook.nop
+  in
+  let expect_mismatch_handler : Context_free.Expect_mismatch_handler.t =
+    { f = fun context (loc : Location.t) generated ->
+        add_to_list corrections
+          (Reconcile.Replacement.make ()
+             ~context:(Floating_attribute context)
+             ~start:loc.loc_start
+             ~stop:loc.loc_end
+             ~repl:(Many generated))
+    }
+  in
 
-    let ast : Some_intf_or_impl.t =
-      try
-        let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
-        let ast = extract_cookies ast in
-        match ast with
-        | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
-        | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
-      with exn when embed_errors ->
-      match Location.Error.of_exn exn with
-      | None -> raise exn
-      | Some error ->
-        let loc = Location.none in
-        let ext = Location.Error.to_extension error in
+  let ast : Some_intf_or_impl.t =
+    try
+      let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
+      let ast = extract_cookies ast in
+      match ast with
+      | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
+      | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
+    with exn when embed_errors ->
+    match Location.Error.of_exn exn with
+    | None -> raise exn
+    | Some error ->
+      let loc = Location.none in
+      let ext = Location.Error.to_extension error in
         let open Ast_builder.Default in
         match kind with
         | Intf -> Intf (Sig ((module Ppx_ast.Selected_ast),
@@ -758,12 +819,12 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
     let input_contents = lazy (load_source_file fn) in
     let corrected = fn ^ ".ppx-corrected" in
     let mismatches_found =
-      match !expect_mismatches with
+      match !corrections with
       | [] ->
         if Caml.Sys.file_exists corrected then Caml.Sys.remove corrected;
         false
-      | mismatches ->
-        Reconcile.reconcile mismatches ~contents:(Lazy.force input_contents)
+      | corrections ->
+        Reconcile.reconcile corrections ~contents:(Lazy.force input_contents)
           ~output:(Some corrected) ~input_filename:fn ~input_name ~target:Corrected
           ?styler:!styler ~kind;
         true
@@ -904,8 +965,6 @@ let interpret_mask () =
         not (Set.mem forbidden name)))
   end
 
-let use_optcomp = ref true
-
 let shared_args =
   [ "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
     "<string> File name to use in locations"
@@ -960,8 +1019,6 @@ let standalone_args =
     "<filename> Output file (use '-' for stdout)"
   ; "-", Arg.Unit (fun () -> set_input "-"),
     " Read input from stdin"
-  ; "-no-optcomp", Arg.Clear use_optcomp,
-    " Do not use optcomp (default if the input or output of -pp is a binary AST)"
   ; "-dump-ast", Arg.Unit (fun () -> set_output_mode Dump_ast),
     " Dump the marshaled ast to the output file instead of pretty-printing it"
   ; "--dump-ast", Arg.Unit (fun () -> set_output_mode Dump_ast),
@@ -1011,11 +1068,6 @@ let standalone_args =
   ]
 ;;
 
-module Optcomp = Ppx_optcomp.Make(struct
-    let lexer = Lexer.token
-    let env = Ppx_optcomp.Env.init
-  end)
-
 let standalone_main () =
   let usage =
     Printf.sprintf "%s [extra_args] [<files>]" exe_name
@@ -1031,7 +1083,6 @@ let standalone_main () =
     print_passes ();
     Caml.exit 0;
   end;
-  if !use_optcomp then Lexer.set_preprocessor Optcomp.init Optcomp.map_lexer;
   match !input with
   | None    ->
     eprintf "%s: no input file given\n%!" exe_name;

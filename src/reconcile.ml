@@ -32,22 +32,29 @@ module Context = struct
 end
 
 module Replacement = struct
+  type data =
+    | Values : 'a Context.t * 'a Context_free.Generated_code_hook.single_or_many -> data
+    | Text of string
+
   type t =
-      T : { context        : 'a Context.t
-          ; start          : Lexing.position
-          ; stop           : Lexing.position
-          ; generated      : 'a Context_free.Generated_code_hook.single_or_many
-          ; is_expectation : bool
-          } -> t
+    { start : Lexing.position
+    ; stop  : Lexing.position
+    ; data  : data
+    }
 
-  let make ?(is_expectation=false) ~context ~start ~stop ~repl () =
-    T { context; start; stop; generated = repl; is_expectation }
+  let make ~context ~start ~stop ~repl () =
+    { start; stop; data = Values (context, repl) }
 
-  let text =
-    fun (T block) ->
-      let printer = Context.printer block.context in
+  let make_text ~start ~stop ~repl () =
+    { start; stop; data = Text repl }
+
+  let text block =
+    match block.data with
+    | Text s -> s
+    | Values (context, generated) ->
       let s =
-        match block.generated with
+        let printer = Context.printer context in
+        match generated with
         | Single x ->
           Caml.Format.asprintf "%a" printer x
         | Many l ->
@@ -85,7 +92,7 @@ module Replacements = struct
   (* Merge locations of the generated code. Overlapping locations are merged into one. The
      result is sorted from the beginning of the file to the end. *)
   let check_and_sort ~input_filename ~input_name repls =
-    List.iter repls ~f:(fun (T repl) ->
+    List.iter repls ~f:(fun repl ->
       if String.(<>) repl.start.pos_fname input_name ||
          String.(<>) repl.stop .pos_fname input_name then
         Location.raise_errorf ~loc:(Location.in_file input_filename)
@@ -93,7 +100,7 @@ module Replacements = struct
            It is too complicated to reconcile it with the source";
       assert (repl.start.pos_cnum <= repl.stop.pos_cnum));
     let repls =
-      List.sort repls ~cmp:(fun (T a) (T b) ->
+      List.sort repls ~cmp:(fun  a b ->
         let d = compare a.start.pos_cnum b.stop.pos_cnum in
         if d = 0 then
           (* Put the largest first, so that the following [filter] functions always picks up
@@ -102,20 +109,20 @@ module Replacements = struct
         else
           d)
     in
-    let rec filter (T prev) repls ~acc =
+    let rec filter prev repls ~acc =
       match repls with
-      | [] -> List.rev (T prev :: acc)
-      | (T repl) :: repls ->
+      | [] -> List.rev (prev :: acc)
+      | repl :: repls ->
         if prev.stop.pos_cnum > repl.start.pos_cnum then begin
           if prev.stop.pos_cnum >= repl.stop.pos_cnum then
             (* [repl] is included in [prev] => skip [repl] *)
-            filter (T prev) repls ~acc
+            filter prev repls ~acc
           else
             Location.raise_errorf
               "ppx_driver: locations of generated code are overlapping, cannot reconcile"
               ~loc:{ loc_start = repl.start; loc_end = prev.stop; loc_ghost = false };
         end else
-          filter (T repl) repls ~acc:(T prev :: acc)
+          filter repl repls ~acc:(prev :: acc)
     in
     match repls with
     | [] -> []
@@ -194,8 +201,8 @@ let reconcile ?styler (repls : Replacements.t) ~kind ~contents ~input_filename
     | Some fn -> fn
   in
   with_output output ~styler ~kind ~f:(fun oc ->
-    let copy_input pos ~up_to ~line =
-      let pos = skip_blank_eol contents pos in
+    let copy_input pos ~up_to ~line ~last_is_text ~is_text =
+      let pos = if last_is_text then pos else skip_blank_eol contents pos in
       if pos.pos_cnum < up_to then begin
         (match target with
          | Output Using_line_directives ->
@@ -208,19 +215,28 @@ let reconcile ?styler (repls : Replacements.t) ~kind ~contents ~input_filename
           if Char.equal contents.[i] '\n' then line := !line + 1
         done;
         let line = !line in
-        if Char.(<>) contents.[up_to - 1] '\n' then
+        if not is_text && Char.(<>) contents.[up_to - 1] '\n' then
           (Out_channel.output_char oc '\n'; line + 1)
         else
           line
       end else
         line
     in
-    let rec loop line (pos : Lexing.position) repls =
+    let rec loop line (pos : Lexing.position) repls ~last_is_text =
       match repls with
-      | [] -> ignore (copy_input pos ~up_to:(String.length contents) ~line : int)
-      | (T repl) :: repls ->
-        let line = copy_input pos ~up_to:repl.start.pos_cnum ~line in
-        let s = Replacement.text (T repl) in
+      | [] ->
+        ignore (copy_input pos ~up_to:(String.length contents) ~line
+                  ~last_is_text ~is_text:false : int)
+      | repl :: repls ->
+        let is_text =
+          match repl.data with
+          | Text _ -> true
+          | Values _ -> false
+        in
+        let line =
+          copy_input pos ~up_to:repl.start.pos_cnum ~line ~last_is_text ~is_text
+        in
+        let s = Replacement.text repl in
         let line =
           match target with
           | Output Using_line_directives ->
@@ -234,26 +250,31 @@ let reconcile ?styler (repls : Replacements.t) ~kind ~contents ~input_filename
         in
         Out_channel.output_string oc s;
         let line = line + count_newlines s in
-        loop_consecutive_repls line repl.stop repls
-    and loop_consecutive_repls line (pos : Lexing.position) repls =
+        loop_consecutive_repls line repl.stop repls ~last_is_text:is_text
+    and loop_consecutive_repls line (pos : Lexing.position) repls ~last_is_text =
       match repls with
-      | [] -> end_consecutive_repls line pos repls
-      | (T repl) :: repls' ->
-        let pos = skip_blank_eol contents pos in
+      | [] -> end_consecutive_repls line pos repls ~last_is_text
+      | repl :: repls' ->
+        let pos = if last_is_text then pos else skip_blank_eol contents pos in
         if pos.pos_cnum < repl.start.pos_cnum then
-          end_consecutive_repls line pos repls
+          end_consecutive_repls line pos repls ~last_is_text
         else begin
-          let s = Replacement.text (T repl) in
+          let s = Replacement.text repl in
           Out_channel.output_string oc s;
           let line = line + count_newlines s in
-          loop_consecutive_repls line repl.stop repls'
+          let last_is_text =
+            match repl.data with
+            | Text _ -> true
+            | Values _ -> false
+          in
+          loop_consecutive_repls line repl.stop repls' ~last_is_text
         end
-    and end_consecutive_repls line pos repls =
+    and end_consecutive_repls line pos repls ~last_is_text =
       (match target with
        | Output Using_line_directives | Corrected -> ()
        | Output Delimiting_generated_blocks ->
          Out_channel.fprintf oc "%s\n" generated_code_end);
-      loop line pos repls
+      loop line pos repls ~last_is_text
     in
     let pos =
       { Lexing.
@@ -264,11 +285,11 @@ let reconcile ?styler (repls : Replacements.t) ~kind ~contents ~input_filename
       }
     in
     match repls with
-    | (T { start = { pos_cnum = 0; _ }; _ }) :: _ ->
+    | { start = { pos_cnum = 0; _ }; _ } :: _ ->
       (match target with
        | Output Using_line_directives | Corrected -> ()
        | Output Delimiting_generated_blocks ->
          Out_channel.fprintf oc "%s\n" generated_code_begin);
-      loop_consecutive_repls 1 pos repls
+      loop_consecutive_repls 1 pos repls ~last_is_text:false
     | _ ->
-      loop 1 pos repls)
+      loop 1 pos repls ~last_is_text:false)

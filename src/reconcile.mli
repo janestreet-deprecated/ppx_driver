@@ -10,11 +10,17 @@ module Replacement : sig
   type t
 
   val make
-    :  ?is_expectation:bool (** default: false *)
-    -> context:'a Context.t
+    :  context:'a Context.t
     -> start:Lexing.position
     -> stop:Lexing.position
     -> repl:'a Context_free.Generated_code_hook.single_or_many
+    -> unit
+    -> t
+
+  val make_text
+    :  start:Lexing.position
+    -> stop:Lexing.position
+    -> repl:string
     -> unit
     -> t
 end

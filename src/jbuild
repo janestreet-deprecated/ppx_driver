@@ -4,7 +4,6 @@
   (flags (:standard -safe-string))
   (libraries (compiler-libs.common
               ppx_core
-              ppx_optcomp
               print_diff
               ocaml-migrate-parsetree))
   (preprocess no_preprocessing)
