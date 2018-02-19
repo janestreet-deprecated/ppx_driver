@@ -21,6 +21,7 @@ let use_color = ref true
 let diff_command = ref Options.diff_command
 let pretty = ref false
 let styler = ref None
+let output_metadata_filename = ref None
 
 module Lint_error = struct
   type t = Location.t * string
@@ -704,26 +705,53 @@ let add_cookies (ast : Intf_or_impl.t) : Intf_or_impl.t =
   | Intf x -> Intf (add_cookies_sig x)
   | Impl x -> Impl (add_cookies_str x)
 
+let add_to_list r x = r := x :: !r
+
+let process_file_hooks = ref []
+
+let register_process_file_hook f =
+  add_to_list process_file_hooks f
+
+let after_process_file_hooks = ref []
+
+let register_after_process_file_hook f =
+  add_to_list after_process_file_hooks f
+
+module Create_file_property(Name : sig val name : string end)(T : Sexpable.S) = struct
+  let cell = ref None
+
+  let set x = cell := Some x
+
+  let () =
+    register_process_file_hook (fun () -> cell := None);
+    register_after_process_file_hook (fun () ->
+      match !cell with
+      | None -> None
+      | Some v ->
+        cell := None;
+        Some (Name.name, T.sexp_of_t v))
+end
+
 let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~output =
-    let replacements = ref [] in
-    let expect_mismatches = ref [] in
-    let add_to_list r x = r := x :: !r in
-    let hook : Context_free.Generated_code_hook.t =
-      match output_mode with
-      | Reconcile (Using_line_directives | Delimiting_generated_blocks) ->
-        { f = fun context (loc : Location.t) generated ->
+  let replacements = ref [] in
+  let expect_mismatches = ref [] in
+  let add_to_list r x = r := x :: !r in
+  let hook : Context_free.Generated_code_hook.t =
+    match output_mode with
+    | Reconcile (Using_line_directives | Delimiting_generated_blocks) ->
+      { f = fun context (loc : Location.t) generated ->
             add_to_list replacements
               (Reconcile.Replacement.make ()
                  ~context:(Extension context)
                  ~start:loc.loc_start
                  ~stop:loc.loc_end
                  ~repl:generated)
-        }
-      | _ ->
-        Context_free.Generated_code_hook.nop
-    in
-    let expect_mismatch_handler : Context_free.Expect_mismatch_handler.t =
-      { f = fun context (loc : Location.t) generated ->
+      }
+    | _ ->
+      Context_free.Generated_code_hook.nop
+  in
+  let expect_mismatch_handler : Context_free.Expect_mismatch_handler.t =
+    { f = fun context (loc : Location.t) generated ->
           add_to_list expect_mismatches
             (Reconcile.Replacement.make ()
                ~context:(Floating_attribute context)
@@ -731,48 +759,58 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
                ~stop:loc.loc_end
                ~repl:(Many generated)
                ~is_expectation:true)
-      }
-    in
+    }
+  in
 
-    let ast : Some_intf_or_impl.t =
-      try
-        let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
-        let ast = extract_cookies ast in
-        match ast with
-        | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
-        | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
-      with exn when embed_errors ->
-      match Location.Error.of_exn exn with
-      | None -> raise exn
-      | Some error ->
-        let loc = Location.none in
-        let ext = Location.Error.to_extension error in
-        let open Ast_builder.Default in
-        match kind with
-        | Intf -> Intf (Sig ((module Ppx_ast.Selected_ast),
-                             [ psig_extension ~loc ext [] ]))
-        | Impl -> Impl (Str ((module Ppx_ast.Selected_ast),
-                             [ pstr_extension ~loc ext [] ]))
-    in
+  let ast : Some_intf_or_impl.t =
+    try
+      let ast = with_preprocessed_input fn ~f:(load_input kind fn input_name) in
+      let ast = extract_cookies ast in
+      match ast with
+      | Intf x -> Intf (map_signature_gen x ~hook ~expect_mismatch_handler)
+      | Impl x -> Impl (map_structure_gen x ~hook ~expect_mismatch_handler)
+    with exn when embed_errors ->
+    match Location.Error.of_exn exn with
+    | None -> raise exn
+    | Some error ->
+      let loc = Location.none in
+      let ext = Location.Error.to_extension error in
+      let open Ast_builder.Default in
+      match kind with
+      | Intf -> Intf (Sig ((module Ppx_ast.Selected_ast),
+                           [ psig_extension ~loc ext [] ]))
+      | Impl -> Impl (Str ((module Ppx_ast.Selected_ast),
+                           [ pstr_extension ~loc ext [] ]))
+  in
 
-    let input_contents = lazy (load_source_file fn) in
-    let corrected = fn ^ ".ppx-corrected" in
-    let mismatches_found =
-      match !expect_mismatches with
-      | [] ->
-        if Caml.Sys.file_exists corrected then Caml.Sys.remove corrected;
-        false
-      | mismatches ->
-        Reconcile.reconcile mismatches ~contents:(Lazy.force input_contents)
-          ~output:(Some corrected) ~input_filename:fn ~input_name ~target:Corrected
-          ?styler:!styler ~kind;
-        true
-    in
+  let metadata =
+    List.filter_map (List.rev !after_process_file_hooks) ~f:(fun f -> f ())
+  in
+  Option.iter !output_metadata_filename ~f:(fun fn ->
+      Out_channel.write_all fn
+        ~data:(
+          List.map metadata ~f:(fun (s, sexp) ->
+              Sexp.to_string_hum (List [Atom s; sexp]) ^ "\n")
+          |> String.concat ~sep:""));
 
-    (match output_mode with
-     | Null -> ()
-     | Pretty_print ->
-       with_output output ~binary:false ~f:(fun oc ->
+  let input_contents = lazy (load_source_file fn) in
+  let corrected = fn ^ ".ppx-corrected" in
+  let mismatches_found =
+    match !expect_mismatches with
+    | [] ->
+      if Caml.Sys.file_exists corrected then Caml.Sys.remove corrected;
+      false
+    | mismatches ->
+      Reconcile.reconcile mismatches ~contents:(Lazy.force input_contents)
+        ~output:(Some corrected) ~input_filename:fn ~input_name ~target:Corrected
+        ?styler:!styler ~kind;
+      true
+  in
+
+  (match output_mode with
+   | Null -> ()
+   | Pretty_print ->
+     with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in
          let ast = Intf_or_impl.of_some_intf_or_impl ast in
          (match ast with
@@ -784,12 +822,12 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
            | _ -> false
          in
          if not null_ast then Caml.Format.pp_print_newline ppf ())
-     | Dump_ast ->
-       with_output output ~binary:true ~f:(fun oc ->
+   | Dump_ast ->
+     with_output output ~binary:true ~f:(fun oc ->
          let ast = Some_intf_or_impl.to_ast_io ast ~add_ppx_context:true in
          Migrate_parsetree.Ast_io.to_channel oc input_name ast)
-     | Dparsetree ->
-       with_output output ~binary:false ~f:(fun oc ->
+   | Dparsetree ->
+     with_output output ~binary:false ~f:(fun oc ->
          let ppf = Caml.Format.formatter_of_out_channel oc in
          let ast = Intf_or_impl.of_some_intf_or_impl ast in
          let ast = add_cookies ast in
@@ -797,19 +835,19 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
           | Intf ast -> Sexp.pp_hum ppf (Ast_traverse.sexp_of#signature ast)
           | Impl ast -> Sexp.pp_hum ppf (Ast_traverse.sexp_of#structure ast));
          Caml.Format.pp_print_newline ppf ())
-     | Reconcile mode ->
-       Reconcile.reconcile !replacements ~contents:(Lazy.force input_contents) ~output
-         ~input_filename:fn ~input_name ~target:(Output mode) ?styler:!styler
-         ~kind);
+   | Reconcile mode ->
+     Reconcile.reconcile !replacements ~contents:(Lazy.force input_contents) ~output
+       ~input_filename:fn ~input_name ~target:(Output mode) ?styler:!styler
+       ~kind);
 
-    if mismatches_found &&
-       (match !diff_command with
-        | Some  "-" -> false
-        | _ -> true) then begin
-      Print_diff.print () ~file1:fn ~file2:corrected ~use_color:!use_color
-        ?diff_command:!diff_command;
-      Caml.exit 1
-    end
+  if mismatches_found &&
+     (match !diff_command with
+      | Some  "-" -> false
+      | _ -> true) then begin
+    Print_diff.print () ~file1:fn ~file2:corrected ~use_color:!use_color
+      ?diff_command:!diff_command;
+    Caml.exit 1
+  end
 ;;
 
 let loc_fname = ref None
@@ -1008,6 +1046,8 @@ let standalone_args =
     "NAME=EXPR Set the cookie NAME to EXPR"
   ; "--cookie", Arg.String set_cookie,
     " Same as -cookie"
+  ; "-output-metadata", Arg.String (fun s -> output_metadata_filename := Some s),
+    "FILE Where to store the output metadata"
   ]
 ;;
 

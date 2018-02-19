@@ -118,6 +118,23 @@ val register_code_transformation
   -> unit
   [@@deprecated "[since 2015-11] use register_transformation instead"]
 
+(** Create a new file property.
+
+    A file property represent a piece of information about a file that can be set during
+    preprocessing. If the [-output-metadata FILE] command line option was passed to the
+    driver, then it will output this information to the given file.
+
+    This mechanism is used to pass information gathered while preprocessing the file to
+    the build system. For instance, this is used by ppx_inline_test to tell whether a file
+    contains tests or not.
+
+    In the future we could also use this to directly compute the dependencies and pass
+    them here, to avoid calling ocamldep separately.
+*)
+module Create_file_property(Name : sig val name : string end)(T : Sexpable.S) : sig
+  val set : T.t -> unit
+end
+
 (** Suitable for -pp and also usable as a standalone command line tool.
 
     If the first command line argument is [-as-ppx] then it will run as a ppx rewriter. *)
