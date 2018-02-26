@@ -944,26 +944,6 @@ let interpret_mask () =
 
 let use_optcomp = ref true
 
-let shared_args =
-  [ "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
-    "<string> File name to use in locations"
-  ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
-    "<string> Mark the given namespace as reserved"
-  ; "-no-check", Arg.Clear perform_checks,
-    " Disable checks (unsafe)"
-  ; "-no-check-on-extensions", Arg.Clear perform_checks_on_extensions,
-    " Disable checks on extension point only"
-  ; "-apply", Arg.String handle_apply,
-    "<names> Apply these transformations in order (comma-separated list)"
-  ; "-dont-apply", Arg.String handle_dont_apply,
-    "<names> Exclude these transformations"
-  ; "-no-merge", Arg.Set no_merge,
-    " Do not merge context free transformations (better for debugging rewriters)"
-  ]
-
-let () =
-  List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
-
 let set_cookie s =
   match String.lsplit2 s ~on:'=' with
   | None ->
@@ -980,6 +960,30 @@ let set_cookie s =
     let expr = Parse.expression lexbuf in
     Ocaml_common.Ast_mapper.set_cookie name
       (Ppx_ast.Selected_ast.to_ocaml Expression expr)
+
+let shared_args =
+  [ "-loc-filename", Arg.String (fun s -> loc_fname := Some s),
+    "<string> File name to use in locations"
+  ; "-reserve-namespace", Arg.String Reserved_namespaces.reserve,
+    "<string> Mark the given namespace as reserved"
+  ; "-no-check", Arg.Clear perform_checks,
+    " Disable checks (unsafe)"
+  ; "-no-check-on-extensions", Arg.Clear perform_checks_on_extensions,
+    " Disable checks on extension point only"
+  ; "-apply", Arg.String handle_apply,
+    "<names> Apply these transformations in order (comma-separated list)"
+  ; "-dont-apply", Arg.String handle_dont_apply,
+    "<names> Exclude these transformations"
+  ; "-no-merge", Arg.Set no_merge,
+    " Do not merge context free transformations (better for debugging rewriters)"
+  ; "-cookie", Arg.String set_cookie,
+    "NAME=EXPR Set the cookie NAME to EXPR"
+  ; "--cookie", Arg.String set_cookie,
+    " Same as -cookie"
+  ]
+
+let () =
+  List.iter shared_args ~f:(fun (key, spec, doc) -> add_arg key spec ~doc)
 
 let as_pp () =
   set_output_mode Dump_ast;
@@ -1042,10 +1046,6 @@ let standalone_args =
     " Instruct code generators to improve the prettiness of the generated code"
   ; "-styler", Arg.String (fun s -> styler := Some s),
     " Code styler"
-  ; "-cookie", Arg.String set_cookie,
-    "NAME=EXPR Set the cookie NAME to EXPR"
-  ; "--cookie", Arg.String set_cookie,
-    " Same as -cookie"
   ; "-output-metadata", Arg.String (fun s -> output_metadata_filename := Some s),
     "FILE Where to store the output metadata"
   ]

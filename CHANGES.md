@@ -3,6 +3,8 @@
 - Add a mechanism for ppx rewriters to pass informations to the build
   system
 
+- Support `-as-ppx --cookie ...`
+
 ## v0.10.2
 
 - `-diff-cmd -` disables the diffing, to allow
