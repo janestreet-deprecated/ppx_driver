@@ -3,7 +3,7 @@
   (public_name ppx_driver)
   (flags (:standard -safe-string))
   (libraries (compiler-libs.common
-              ppx_core
+              ppxlib.base
               print_diff
               ocaml-migrate-parsetree))
   (preprocess no_preprocessing)
