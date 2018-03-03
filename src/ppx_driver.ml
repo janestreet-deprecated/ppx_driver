@@ -1063,7 +1063,14 @@ let standalone_main () =
   let usage =
     Printf.sprintf "%s [extra_args] [<files>]" exe_name
   in
-  let args = List.rev_append !args standalone_args in
+  let args =
+    List.concat
+      [ List.rev !args
+      ; Migrate_parsetree.Driver.registered_args ()
+      ; standalone_args
+      ]
+  in
+  Migrate_parsetree.Driver.reset_args ();
   Arg.parse (Arg.align args) set_input usage;
   interpret_mask ();
   if !request_print_transformations then begin
@@ -1116,7 +1123,14 @@ let standalone_run_as_ppx_rewriter () =
     List.map standalone_args ~f:(fun (arg, spec, _doc) ->
       (arg, spec, " Unused with -as-ppx"))
   in
-  let args = List.rev_append !args standalone_args in
+  let args =
+    List.concat
+      [ List.rev !args
+      ; Migrate_parsetree.Driver.registered_args ()
+      ; standalone_args
+      ]
+  in
+  Migrate_parsetree.Driver.reset_args ();
   match
     Arg.parse_argv argv (Arg.align args)
       (fun _ -> raise (Arg.Bad "anonymous arguments not accepted"))

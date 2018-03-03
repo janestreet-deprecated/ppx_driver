@@ -9,6 +9,8 @@
 
 - Use the new generic ppx driver support of Jbuilder
 
+- Use command line arguments registerd with ocaml-migrate-parsetree
+
 ## v0.10.2
 
 - `-diff-cmd -` disables the diffing, to allow
