@@ -5,6 +5,8 @@
 
 - Support `-as-ppx --cookie ...`
 
+- Add `-corrected-suffix SUFFIX` to set the suffix for the corrected file
+
 ## v0.10.2
 
 - `-diff-cmd -` disables the diffing, to allow

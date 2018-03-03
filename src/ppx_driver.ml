@@ -22,6 +22,7 @@ let diff_command = ref Options.diff_command
 let pretty = ref false
 let styler = ref None
 let output_metadata_filename = ref None
+let corrected_suffix = ref ".ppx-corrected"
 
 module Lint_error = struct
   type t = Location.t * string
@@ -794,7 +795,7 @@ let process_file (kind : Kind.t) fn ~input_name ~output_mode ~embed_errors ~outp
           |> String.concat ~sep:""));
 
   let input_contents = lazy (load_source_file fn) in
-  let corrected = fn ^ ".ppx-corrected" in
+  let corrected = fn ^ !corrected_suffix in
   let mismatches_found =
     match !expect_mismatches with
     | [] ->
@@ -980,6 +981,8 @@ let shared_args =
     "NAME=EXPR Set the cookie NAME to EXPR"
   ; "--cookie", Arg.String set_cookie,
     " Same as -cookie"
+  ; "-corrected-suffix", Arg.Set_string corrected_suffix,
+    "SUFFIX Set the suffix for the corrected fille (default: .ppx-corrected)"
   ]
 
 let () =
