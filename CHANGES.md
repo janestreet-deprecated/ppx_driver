@@ -7,6 +7,8 @@
 
 - Add `-corrected-suffix SUFFIX` to set the suffix for the corrected file
 
+- Use the new generic ppx driver support of Jbuilder
+
 ## v0.10.2
 
 - `-diff-cmd -` disables the diffing, to allow
