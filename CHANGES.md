@@ -15,8 +15,13 @@
 - `ppx_optcomp` is not linked by default anymore, people who want to keep using
   it will need to explicitely depend on `ppx_optcomp_old`.
 
-- rewriters can now register corrections using the `register_correction`
+- Rewriters can now register corrections using the `register_correction`
   function.
+
+- Add a mechanism to allow rewriters to pass information gathered
+  during the rewriting to the build system. A rewriter can now
+  register a *File property* that will be dumped by the driver when
+  using `-output-metadata FILE`
 
 ## 113.43.00
 
