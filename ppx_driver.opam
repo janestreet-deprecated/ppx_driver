@@ -12,7 +12,7 @@ build: [
 depends: [
   "ppx_core"                {>= "v0.10" & < "v0.11"}
   "ppx_optcomp"             {>= "v0.10" & < "v0.11"}
-  "jbuilder"                {build & >= "1.0+beta19"}
+  "jbuilder"                {build & >= "1.0+beta18.1"}
   "ocaml-migrate-parsetree" {>= "1.0.9"}
 ]
 available: [ ocaml-version >= "4.04.1" ]
