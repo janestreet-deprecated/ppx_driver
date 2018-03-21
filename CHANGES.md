@@ -1,4 +1,4 @@
-## next
+## v0.10.4
 
 - Fix an issue where cookies set from the command line sometimes
   disappeared
