@@ -4,7 +4,6 @@
  ((name ppx_driver_runner_as_ppx)
   (public_name ppx_driver.runner_as_ppx)
   (library_flags (-linkall))
-  (flags (:standard -safe-string))
   (libraries (ppx_driver))
   (preprocess no_preprocessing)))
 
